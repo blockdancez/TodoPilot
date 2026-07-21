@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>TodoPilot</string>
+	<key>CFBundleExecutable</key>
+	<string>$(EXECUTABLE_NAME)</string>
+	<key>CFBundleIdentifier</key>
+	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>$(PRODUCT_NAME)</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright 2026 TodoPilot</string>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>TodoPilot reads today&apos;s local calendar events to suggest task candidates when Calendar import refreshes.</string>
+	<key>NSCalendarsUsageDescription</key>
+	<string>TodoPilot reads today&apos;s local calendar events to suggest task candidates when Calendar import refreshes.</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>TodoPilot reads today&apos;s local reminders with due dates to suggest task candidates when Calendar import refreshes.</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>TodoPilot reads today&apos;s local reminders with due dates to suggest task candidates when Calendar import refreshes.</string>
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+	<key>NSSupportsAutomaticTermination</key>
+	<true/>
+	<key>NSSupportsSuddenTermination</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,123 @@
+name: TodoPilot
+
+options:
+  minimumXcodeGenVersion: 2.45.0
+  deploymentTarget:
+    macOS: "14.0"
+
+settings:
+  base:
+    SWIFT_VERSION: 5.0
+    MACOSX_DEPLOYMENT_TARGET: 14.0
+    CODE_SIGNING_ALLOWED: NO
+
+targets:
+  TodoPilot:
+    type: application
+    platform: macOS
+    sources:
+      - path: TodoPilot
+    info:
+      path: TodoPilot/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: TodoPilot
+        CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
+        CFBundleName: $(PRODUCT_NAME)
+        CFBundleShortVersionString: 0.1.0
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
+        NSHumanReadableCopyright: Copyright 2026 TodoPilot
+        NSCalendarsFullAccessUsageDescription: TodoPilot reads today's local calendar events to suggest task candidates when Calendar import refreshes.
+        NSCalendarsUsageDescription: TodoPilot reads today's local calendar events to suggest task candidates when Calendar import refreshes.
+        NSRemindersFullAccessUsageDescription: TodoPilot reads today's local reminders with due dates to suggest task candidates when Calendar import refreshes.
+        NSRemindersUsageDescription: TodoPilot reads today's local reminders with due dates to suggest task candidates when Calendar import refreshes.
+        NSPrincipalClass: NSApplication
+        NSSupportsAutomaticTermination: true
+        NSSupportsSuddenTermination: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fubb.TodoPilot
+        PRODUCT_NAME: TodoPilot
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_OBJC_BRIDGING_HEADER: TodoPilot/TodoPilot-Bridging-Header.h
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+    dependencies:
+      - target: TodoPilotAgentHook
+        embed: false
+    postBuildScripts:
+      - name: Copy TodoPilot Agent Hook Helper
+        script: |
+          set -eu
+          HELPER_SOURCE="${BUILT_PRODUCTS_DIR}/TodoPilotAgentHook"
+          HELPER_DIRECTORY="${TARGET_BUILD_DIR}/${CONTENTS_FOLDER_PATH}/Helpers"
+          mkdir -p "${HELPER_DIRECTORY}"
+          ditto "${HELPER_SOURCE}" "${HELPER_DIRECTORY}/TodoPilotAgentHook"
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/TodoPilotAgentHook
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/TodoPilotAgentHook
+
+  TodoPilotAgentHook:
+    type: tool
+    platform: macOS
+    sources:
+      - path: TodoPilotAgentHook/Core
+      - path: TodoPilotAgentHook/CLI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fubb.TodoPilotAgentHook
+        PRODUCT_NAME: TodoPilotAgentHook
+        MACOSX_DEPLOYMENT_TARGET: 14.0
+        CODE_SIGNING_ALLOWED: YES
+        ENABLE_HARDENED_RUNTIME: YES
+
+  TodoPilotTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: TodoPilotTests
+      - path: TodoPilotAgentHook/Core
+    dependencies:
+      - target: TodoPilot
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fubb.TodoPilotTests
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+
+  TodoPilotUITests:
+    type: bundle.ui-testing
+    platform: macOS
+    sources:
+      - path: TodoPilotUITests
+    dependencies:
+      - target: TodoPilot
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.fubb.TodoPilotUITests
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS: NO
+
+schemes:
+  TodoPilot:
+    build:
+      targets:
+        TodoPilot: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - TodoPilotTests
+
+  TodoPilotUITests:
+    build:
+      targets:
+        TodoPilot: all
+        TodoPilotUITests: all
+    test:
+      config: Debug
+      targets:
+        - TodoPilotUITests
