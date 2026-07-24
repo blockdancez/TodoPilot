@@ -72,25 +72,21 @@ struct RootView: View {
             environment.registerConfiguredHotKeyIfNeeded()
             reconcileAutomaticOnboardingPresentation()
         }
-        .onChange(of: environment.agentIntegrationSnapshots.count) {
-            reconcileAutomaticOnboardingPresentation()
-        }
         .sheet(item: $onboardingPresentation, onDismiss: {
             reconcileAutomaticOnboardingPresentation()
-        }) { presentation in
+        }) { _ in
             OnboardingGuideView(
-                presentation: presentation,
                 onFinish: {
-                    finishOnboarding(presentation)
+                    finishOnboarding()
                 },
                 onOpenSettings: {
-                    finishOnboarding(presentation)
+                    finishOnboarding()
                     settingsInitialSection = .general
                     settingsViewIdentity = UUID()
                     selection = .settings
                 },
                 onOpenAgentSettings: {
-                    finishOnboarding(presentation)
+                    finishOnboarding()
                     settingsInitialSection = .agents
                     settingsViewIdentity = UUID()
                     selection = .settings
@@ -107,19 +103,12 @@ struct RootView: View {
         }
         let settings = settingsStore.settings
         onboardingPresentation = AgentOnboardingPresentationPolicy.presentation(
-            onboardingCompleted: settings.onboardingCompleted,
-            hasInstalledAgentProvider: environment.hasInstalledAgentProvider,
-            agentOnboardingSkipped: settings.agentOnboardingSkipped,
-            hasCompletedAgentDetection: environment.agentIntegrationSnapshots.count
-                >= AgentHookInstaller.Provider.allCases.count,
-            hasDetectedAgentProviders: !environment.detectedAgentProviders.isEmpty
+            onboardingCompleted: settings.onboardingCompleted
         )
     }
 
-    private func finishOnboarding(_ presentation: AgentOnboardingPresentation) {
-        if presentation == .firstLaunch {
-            settingsStore.updateOnboardingCompleted(true)
-        }
+    private func finishOnboarding() {
+        settingsStore.updateOnboardingCompleted(true)
         onboardingPresentation = nil
     }
 }
@@ -330,14 +319,7 @@ private enum Section: String, CaseIterable, Identifiable {
     }
 }
 
-private enum OnboardingStep: Int, CaseIterable, Identifiable {
-    case permission
-    case capture
-    case agents
-    case reminders
-
-    var id: Int { rawValue }
-
+private extension OnboardingStep {
     func title(_ copy: AppCopy) -> String {
         switch self {
         case .permission:
@@ -369,7 +351,6 @@ private struct OnboardingGuideView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @EnvironmentObject private var settingsStore: LocalSettingsStore
     @Environment(\.scenePhase) private var scenePhase
-    let presentation: AgentOnboardingPresentation
     let onFinish: () -> Void
     let onOpenSettings: () -> Void
     let onOpenAgentSettings: () -> Void
@@ -379,32 +360,39 @@ private struct OnboardingGuideView: View {
     @State private var permissionCheckFailed = false
 
     init(
-        presentation: AgentOnboardingPresentation,
         onFinish: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onOpenAgentSettings: @escaping () -> Void
     ) {
-        self.presentation = presentation
         self.onFinish = onFinish
         self.onOpenSettings = onOpenSettings
         self.onOpenAgentSettings = onOpenAgentSettings
-        _step = State(initialValue: presentation == .agentAuthorization ? .agents : .permission)
+        _step = State(initialValue: .permission)
     }
 
     private var availableSteps: [OnboardingStep] {
-        if presentation == .agentAuthorization {
-            return [.agents]
-        }
-        var steps: [OnboardingStep] = [.permission, .capture]
-        if step == .agents || (
-            !settingsStore.settings.agentMonitoringEnabled
-                && !settingsStore.settings.agentOnboardingSkipped
-                && !environment.detectedAgentProviders.isEmpty
-        ) {
-            steps.append(.agents)
-        }
-        steps.append(.reminders)
-        return steps
+        AgentOnboardingPresentationPolicy.firstLaunchSteps(
+            hasDetectedAgentProviders: !environment.detectedAgentProviders.isEmpty
+        )
+    }
+
+    private var hasCompletedAgentDetection: Bool {
+        environment.agentIntegrationSnapshots.count >= AgentHookInstaller.Provider.allCases.count
+    }
+
+    private var agentStepState: AgentOnboardingStepState {
+        AgentOnboardingPresentationPolicy.agentStepState(
+            monitoringEnabled: settingsStore.settings.agentMonitoringEnabled,
+            hasCompletedDetection: hasCompletedAgentDetection,
+            hasDetectedProviders: !environment.detectedAgentProviders.isEmpty
+        )
+    }
+
+    private var privacyContinuation: AgentOnboardingPrivacyContinuation {
+        AgentOnboardingPresentationPolicy.privacyContinuation(
+            hasCompletedDetection: hasCompletedAgentDetection,
+            hasDetectedAgentProviders: !environment.detectedAgentProviders.isEmpty
+        )
     }
 
     private var nextStep: OnboardingStep? {
@@ -425,11 +413,13 @@ private struct OnboardingGuideView: View {
     var body: some View {
         let copy = environment.copy
 
+        let chrome = AgentOnboardingPresentationPolicy.chrome(for: step)
+
         TodoPilotModalShell(
-            title: presentation == .agentAuthorization
+            title: chrome == .agentAuthorization
                 ? rootText(copy, en: "Enable Code Agent monitoring", zh: "启用 Code Agent 监控")
                 : rootText(copy, en: "Welcome to TodoPilot", zh: "欢迎使用 TodoPilot"),
-            subtitle: presentation == .agentAuthorization
+            subtitle: chrome == .agentAuthorization
                 ? rootText(copy, en: "Authorize and install once, then TodoPilot can monitor local Code Agent tasks automatically.", zh: "授权安装后，TodoPilot 会自动监听本机 Code Agent 任务。")
                 : rootText(copy, en: "Start with the required macOS permission, then set up the capture-to-today loop.", zh: "先完成 macOS 必需权限，再了解从捕获到今日执行的闭环。"),
             width: 720,
@@ -471,7 +461,10 @@ private struct OnboardingGuideView: View {
                     }
                 }
                 .buttonStyle(TodoPilotModalQuietButtonStyle())
-                .disabled(step == .agents && environment.agentIntegrationOperation.isInstalling)
+                .disabled(
+                    step == .agents
+                        && (environment.agentIntegrationOperation.isInstalling || agentStepState == .detecting)
+                )
 
                 Spacer()
 
@@ -508,7 +501,11 @@ private struct OnboardingGuideView: View {
                     }
                 }
                 .buttonStyle(TodoPilotModalPrimaryButtonStyle())
-                .disabled(step == .agents && environment.agentIntegrationOperation.isInstalling)
+                .disabled(
+                    (step == .agents
+                        && (environment.agentIntegrationOperation.isInstalling || agentStepState == .detecting))
+                        || (step == .reminders && privacyContinuation == .waitForDetection)
+                )
             }
         }
         .interactiveDismissDisabled(true)
@@ -554,12 +551,35 @@ private struct OnboardingGuideView: View {
             }
         case .agents:
             VStack(alignment: .leading, spacing: 14) {
-                OnboardingBulletList(items: [
-                    rootText(copy, en: "TodoPilot detected: \(detectedProviderNames).", zh: "已检测到：\(detectedProviderNames)。"),
-                    rootText(copy, en: "After authorization, TodoPilot monitors when Code Agent tasks start, finish or need attention.", zh: "授权后，TodoPilot 会监听 Code Agent 任务的开始、完成和异常状态。"),
-                    rootText(copy, en: "Tasks are added to Todo automatically and updated when their status changes.", zh: "任务开始时自动加入 Todo，完成或异常时自动更新并提醒。"),
-                    rootText(copy, en: "You can turn monitoring off or uninstall it anytime in Settings.", zh: "你可以随时在设置中关闭或卸载。")
-                ])
+                switch agentStepState {
+                case .detecting:
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(rootText(copy, en: "Detecting supported Code Agents on this Mac…", zh: "正在检测本机支持的 Code Agent…"))
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(RootTheme.secondaryText)
+                    }
+                case .readyToInstall:
+                    OnboardingBulletList(items: [
+                        rootText(copy, en: "TodoPilot detected: \(detectedProviderNames).", zh: "已检测到：\(detectedProviderNames)。"),
+                        rootText(copy, en: "After authorization, TodoPilot monitors when Code Agent tasks start, finish or need attention.", zh: "授权后，TodoPilot 会监听 Code Agent 任务的开始、完成和异常状态。"),
+                        rootText(copy, en: "Tasks are added to Todo automatically and updated when their status changes.", zh: "任务开始时自动加入 Todo，完成或异常时自动更新并提醒。"),
+                        rootText(copy, en: "You can turn monitoring off or uninstall it anytime in Settings.", zh: "你可以随时在设置中关闭或卸载。")
+                    ])
+                case .unavailable:
+                    OnboardingBulletList(items: [
+                        rootText(copy, en: "No supported Code Agent was detected yet.", zh: "暂未检测到支持的 Code Agent。"),
+                        rootText(copy, en: "TodoPilot supports local Codex, Claude Code, and Cursor monitoring.", zh: "TodoPilot 支持本机 Codex、Claude Code 和 Cursor 监控。"),
+                        rootText(copy, en: "Install or update an Agent, then enable monitoring later in Settings > Agent Monitoring.", zh: "安装或更新 Agent 后，可随时前往“设置 > Agent 监控”开启。")
+                    ])
+                case .enabled:
+                    OnboardingBulletList(items: [
+                        rootText(copy, en: "Code Agent monitoring is already enabled on this Mac.", zh: "本机 Code Agent 监控已经开启。"),
+                        rootText(copy, en: "Tasks are added to Todo automatically and updated when their status changes.", zh: "任务开始时自动加入 Todo，完成或异常时自动更新并提醒。"),
+                        rootText(copy, en: "You can manage providers or uninstall TodoPilot hooks in Settings.", zh: "你可以在设置中管理 Provider 或卸载 TodoPilot Hook。")
+                    ])
+                }
 
                 if environment.detectedAgentProviders.contains(.codex) {
                     Text(rootText(
@@ -582,12 +602,24 @@ private struct OnboardingGuideView: View {
                 }
             }
         case .reminders:
-            OnboardingBulletList(items: [
-                rootText(copy, en: "After local OCR, enter the task title and details yourself before adding it to Today.", zh: "本地 OCR 后，由你手动填写任务标题和详情，再加入今日列表。"),
-                rootText(copy, en: "Screenshots are not uploaded by default, and Apple Vision OCR runs locally.", zh: "截图默认不会上传，Apple Vision OCR 在本地运行。"),
-                rootText(copy, en: "OCR text stays on this Mac; the status island and flight reminders also run locally.", zh: "OCR 文本始终留在本机；状态岛和飞行提醒也在本地运行。"),
-                rootText(copy, en: "You can keep using TodoPilot locally without logging in.", zh: "你可以不登录，直接使用本地模式。")
-            ])
+            VStack(alignment: .leading, spacing: 14) {
+                OnboardingBulletList(items: [
+                    rootText(copy, en: "After local OCR, enter the task title and details yourself before adding it to Today.", zh: "本地 OCR 后，由你手动填写任务标题和详情，再加入今日列表。"),
+                    rootText(copy, en: "Screenshots are not uploaded by default, and Apple Vision OCR runs locally.", zh: "截图默认不会上传，Apple Vision OCR 在本地运行。"),
+                    rootText(copy, en: "OCR text stays on this Mac; the status island and flight reminders also run locally.", zh: "OCR 文本始终留在本机；状态岛和飞行提醒也在本地运行。"),
+                    rootText(copy, en: "You can keep using TodoPilot locally without logging in.", zh: "你可以不登录，直接使用本地模式。")
+                ])
+
+                if privacyContinuation == .waitForDetection {
+                    HStack(spacing: 10) {
+                        ProgressView()
+                            .controlSize(.small)
+                        Text(rootText(copy, en: "Checking this Mac for supported Code Agents…", zh: "正在检测本机支持的 Code Agent…"))
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundStyle(RootTheme.secondaryText)
+                    }
+                }
+            }
         }
     }
 
@@ -597,8 +629,17 @@ private struct OnboardingGuideView: View {
             copy.openPrivacySettings
         case .permission where !screenRecordingGranted:
             rootText(copy, en: "Check Permission", zh: "检查权限")
+        case .reminders where privacyContinuation == .waitForDetection:
+            rootText(copy, en: "Detecting Code Agents…", zh: "正在检测 Code Agent…")
         case .agents:
-            rootText(copy, en: "Authorize & Install", zh: "授权并安装")
+            switch agentStepState {
+            case .detecting:
+                rootText(copy, en: "Detecting…", zh: "检测中…")
+            case .readyToInstall:
+                rootText(copy, en: "Authorize & Install", zh: "授权并安装")
+            case .unavailable, .enabled:
+                rootText(copy, en: "Continue", zh: "继续")
+            }
         default:
             nextStep == nil
                 ? rootText(copy, en: "Start Local Mode", zh: "开始本地模式")
@@ -610,8 +651,19 @@ private struct OnboardingGuideView: View {
         switch step {
         case .permission where !screenRecordingGranted:
             "gearshape"
+        case .reminders where privacyContinuation == .waitForDetection:
+            "magnifyingglass"
         case .agents:
-            "checkmark.shield"
+            switch agentStepState {
+            case .detecting:
+                "magnifyingglass"
+            case .readyToInstall:
+                "checkmark.shield"
+            case .unavailable:
+                "arrow.right"
+            case .enabled:
+                "checkmark"
+            }
         default:
             nextStep == nil ? "checkmark" : "arrow.right"
         }
@@ -634,18 +686,26 @@ private struct OnboardingGuideView: View {
         }
 
         if step == .agents {
-            let providers = Set(environment.detectedAgentProviders)
-            Task { @MainActor in
-                guard await environment.authorizeAgentMonitoring(providers: providers) else {
-                    return
-                }
-                if AgentOnboardingPresentationPolicy.authorizationSuccessAction(for: presentation)
-                    == .openAgentSettings {
-                    onOpenAgentSettings()
-                } else {
-                    advanceOrFinish()
+            switch agentStepState {
+            case .detecting:
+                return
+            case .unavailable, .enabled:
+                advanceOrFinish()
+            case .readyToInstall:
+                let providers = Set(environment.detectedAgentProviders)
+                Task { @MainActor in
+                    guard await environment.authorizeAgentMonitoring(providers: providers) else {
+                        return
+                    }
+                    if AgentOnboardingPresentationPolicy.agentInstallationSuccessAction == .openAgentSettings {
+                        onOpenAgentSettings()
+                    }
                 }
             }
+            return
+        }
+
+        if step == .reminders, privacyContinuation == .waitForDetection {
             return
         }
 
@@ -657,7 +717,6 @@ private struct OnboardingGuideView: View {
             return
         }
         if AgentOnboardingPresentationPolicy.shouldMarkAgentOnboardingSkippedWhenClosing(
-            presentation: presentation,
             isShowingAgentStep: step == .agents
         ) {
             environment.skipAgentOnboarding()

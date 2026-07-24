@@ -4,6 +4,20 @@ TodoPilot is a privacy-first macOS task capture app that turns text on your scre
 
 The Free edition is designed to work entirely on-device. Capture a region, review the locally recognized text, confirm the task, and keep moving from your Today List.
 
+## Website and Download
+
+Visit the [official TodoPilot website](https://reminder.previewship.net) to see the latest release and download the current macOS build.
+
+The official download works in Free Mode without an account or License Key. Local capture, Apple Vision OCR, task management, reminders, and Code Agent monitoring remain available for free.
+
+The current download is an unsigned preview build for macOS 14 or later and uses manual updates. On first launch, macOS may require you to Control-click the app and choose **Open**.
+
+## Free and Pro
+
+This repository contains the open-source Free edition of TodoPilot. It is designed for local, offline-first task capture and does not include the commercial Pro source code or private online services.
+
+The official macOS build also presents optional Pro features. A one-time purchase unlocks AI-assisted task structuring, friend reminders, included AI Credits, and use on the purchased number of Macs. There is no subscription, and the Free features remain available without activation.
+
 ## Highlights
 
 - Capture any screen region with a global keyboard shortcut.

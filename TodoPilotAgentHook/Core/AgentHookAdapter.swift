@@ -141,6 +141,12 @@ struct AgentHookAdapter {
         guard let prompt = Self.firstString(in: payload, keys: promptKeys) else {
             return nil
         }
+        if provider == .codex, Self.isCodexAttachmentWrappedPrompt(prompt) {
+            return Self.codexWrappedRequestTitle(
+                prompt,
+                maximumCharacters: Self.maximumTitleCharacters
+            )
+        }
         return Self.firstNonemptySanitisedLine(prompt, maximumCharacters: Self.maximumTitleCharacters)
     }
 
@@ -214,6 +220,36 @@ struct AgentHookAdapter {
             return String(trimmed.prefix(maximumCharacters))
         }
         return nil
+    }
+
+    private static func isCodexAttachmentWrappedPrompt(_ value: String) -> Bool {
+        value.components(separatedBy: .newlines).contains { line in
+            sanitisedLine(line) == "# Files mentioned by the user:"
+        }
+    }
+
+    private static func codexWrappedRequestTitle(
+        _ value: String,
+        maximumCharacters: Int
+    ) -> String? {
+        let lines = value.components(separatedBy: .newlines)
+        guard let requestMarkerIndex = lines.firstIndex(where: { line in
+            sanitisedLine(line) == "## My request for Codex:"
+        }) else {
+            return nil
+        }
+        guard requestMarkerIndex + 1 < lines.count else {
+            return nil
+        }
+        return firstNonemptySanitisedLine(
+            lines[(requestMarkerIndex + 1)...].joined(separator: "\n"),
+            maximumCharacters: maximumCharacters
+        )
+    }
+
+    private static func sanitisedLine(_ line: String) -> String {
+        String(line.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) })
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     static func sha256(_ value: String) -> String {

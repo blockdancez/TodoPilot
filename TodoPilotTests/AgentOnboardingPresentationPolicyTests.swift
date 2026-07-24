@@ -2,124 +2,109 @@ import XCTest
 @testable import TodoPilot
 
 final class AgentOnboardingPresentationPolicyTests: XCTestCase {
-    func testIncompleteFirstLaunchAlwaysPresentsFullGuide() {
+    func testDetectedAgentAppendsAgentMonitoringAsFinalStep() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.firstLaunchSteps(
+                hasDetectedAgentProviders: true
+            ),
+            [.permission, .capture, .reminders, .agents]
+        )
+    }
+
+    func testNoDetectedAgentEndsFirstLaunchAtPrivacyStep() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.firstLaunchSteps(
+                hasDetectedAgentProviders: false
+            ),
+            [.permission, .capture, .reminders]
+        )
+    }
+
+    func testPrivacyStepWaitsWhileAgentDetectionIsStillRunning() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.privacyContinuation(
+                hasCompletedDetection: false,
+                hasDetectedAgentProviders: false
+            ),
+            .waitForDetection
+        )
+    }
+
+    func testPrivacyStepFinishesWithoutProviderAndContinuesWithProvider() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.privacyContinuation(
+                hasCompletedDetection: true,
+                hasDetectedAgentProviders: false
+            ),
+            .finish
+        )
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.privacyContinuation(
+                hasCompletedDetection: false,
+                hasDetectedAgentProviders: true
+            ),
+            .showAgentStep
+        )
+    }
+
+    func testAgentStepTracksDetectionInstallationAndEnabledStates() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.agentStepState(
+                monitoringEnabled: false,
+                hasCompletedDetection: false,
+                hasDetectedProviders: false
+            ),
+            .detecting
+        )
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.agentStepState(
+                monitoringEnabled: false,
+                hasCompletedDetection: true,
+                hasDetectedProviders: true
+            ),
+            .readyToInstall
+        )
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.agentStepState(
+                monitoringEnabled: true,
+                hasCompletedDetection: false,
+                hasDetectedProviders: false
+            ),
+            .enabled
+        )
+    }
+
+    func testOnlyNewUsersReceiveAutomaticFirstLaunchGuide() {
         XCTAssertEqual(
             AgentOnboardingPresentationPolicy.presentation(
-                onboardingCompleted: false,
-                hasInstalledAgentProvider: false,
-                agentOnboardingSkipped: false,
-                hasCompletedAgentDetection: false,
-                hasDetectedAgentProviders: false
+                onboardingCompleted: false
             ),
             .firstLaunch
         )
-    }
-
-    func testExistingUserWaitsForAgentDetectionToFinish() {
-        XCTAssertNil(AgentOnboardingPresentationPolicy.presentation(
-            onboardingCompleted: true,
-            hasInstalledAgentProvider: false,
-            agentOnboardingSkipped: false,
-            hasCompletedAgentDetection: false,
-            hasDetectedAgentProviders: true
-        ))
-    }
-
-    func testExistingUserWithDetectedAgentPresentsAuthorizationOnly() {
-        XCTAssertEqual(
+        XCTAssertNil(
             AgentOnboardingPresentationPolicy.presentation(
-                onboardingCompleted: true,
-                hasInstalledAgentProvider: false,
-                agentOnboardingSkipped: false,
-                hasCompletedAgentDetection: true,
-                hasDetectedAgentProviders: true
-            ),
+                onboardingCompleted: true
+            )
+        )
+    }
+
+    func testAgentFinalStepUsesAuthorizationChromeAndOpensSettingsAfterInstall() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.chrome(for: .agents),
             .agentAuthorization
         )
-    }
-
-    func testDetectionCompletingAfterFirstLaunchCanPresentAgentAuthorization() {
         XCTAssertEqual(
-            AgentOnboardingPresentationPolicy.presentation(
-                onboardingCompleted: false,
-                hasInstalledAgentProvider: false,
-                agentOnboardingSkipped: false,
-                hasCompletedAgentDetection: false,
-                hasDetectedAgentProviders: false
-            ),
-            .firstLaunch
-        )
-        XCTAssertEqual(
-            AgentOnboardingPresentationPolicy.presentation(
-                onboardingCompleted: true,
-                hasInstalledAgentProvider: false,
-                agentOnboardingSkipped: false,
-                hasCompletedAgentDetection: true,
-                hasDetectedAgentProviders: true
-            ),
-            .agentAuthorization
-        )
-    }
-
-    func testNoAgentDoesNotPresentAuthorization() {
-        XCTAssertNil(AgentOnboardingPresentationPolicy.presentation(
-            onboardingCompleted: true,
-            hasInstalledAgentProvider: false,
-            agentOnboardingSkipped: false,
-            hasCompletedAgentDetection: true,
-            hasDetectedAgentProviders: false
-        ))
-    }
-
-    func testInstalledProviderDoesNotPresentAuthorizationEvenWhenMonitoringIsPaused() {
-        XCTAssertNil(AgentOnboardingPresentationPolicy.presentation(
-            onboardingCompleted: true,
-            hasInstalledAgentProvider: true,
-            agentOnboardingSkipped: false,
-            hasCompletedAgentDetection: true,
-            hasDetectedAgentProviders: true
-        ))
-    }
-
-    func testSkippedAgentOnboardingDoesNotPresentAgain() {
-        XCTAssertNil(AgentOnboardingPresentationPolicy.presentation(
-            onboardingCompleted: true,
-            hasInstalledAgentProvider: false,
-            agentOnboardingSkipped: true,
-            hasCompletedAgentDetection: true,
-            hasDetectedAgentProviders: true
-        ))
-    }
-
-    func testClosingAgentAuthorizationMarksItSkipped() {
-        XCTAssertTrue(AgentOnboardingPresentationPolicy.shouldMarkAgentOnboardingSkippedWhenClosing(
-            presentation: .agentAuthorization,
-            isShowingAgentStep: true
-        ))
-    }
-
-    func testClosingFullGuideOnlyMarksSkippedWhileShowingAgentStep() {
-        XCTAssertFalse(AgentOnboardingPresentationPolicy.shouldMarkAgentOnboardingSkippedWhenClosing(
-            presentation: .firstLaunch,
-            isShowingAgentStep: false
-        ))
-        XCTAssertTrue(AgentOnboardingPresentationPolicy.shouldMarkAgentOnboardingSkippedWhenClosing(
-            presentation: .firstLaunch,
-            isShowingAgentStep: true
-        ))
-    }
-
-    func testIndependentAgentAuthorizationOpensAgentSettingsAfterInstallation() {
-        XCTAssertEqual(
-            AgentOnboardingPresentationPolicy.authorizationSuccessAction(for: .agentAuthorization),
+            AgentOnboardingPresentationPolicy.agentInstallationSuccessAction,
             .openAgentSettings
         )
     }
 
-    func testFullGuideContinuesAfterAgentInstallation() {
-        XCTAssertEqual(
-            AgentOnboardingPresentationPolicy.authorizationSuccessAction(for: .firstLaunch),
-            .continueGuide
-        )
+    func testClosingGuideOnlyMarksAgentSkippedOnAgentStep() {
+        XCTAssertFalse(AgentOnboardingPresentationPolicy.shouldMarkAgentOnboardingSkippedWhenClosing(
+            isShowingAgentStep: false
+        ))
+        XCTAssertTrue(AgentOnboardingPresentationPolicy.shouldMarkAgentOnboardingSkippedWhenClosing(
+            isShowingAgentStep: true
+        ))
     }
 }

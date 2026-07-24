@@ -48,6 +48,19 @@ final class LocalSettingsStoreTests: XCTestCase {
         XCTAssertEqual(chinese.historyDisplayLimitNote, "（仅显示近100条）")
     }
 
+    func testAppVersionPresentationUsesMarketingVersionFromBundleMetadata() {
+        XCTAssertEqual(
+            AppVersionPresentation.displayVersion(infoDictionary: [
+                "CFBundleShortVersionString": "1.0.0"
+            ]),
+            "v1.0.0"
+        )
+        XCTAssertEqual(
+            AppVersionPresentation.displayVersion(infoDictionary: [:]),
+            "—"
+        )
+    }
+
     func testDefaultSettingsMatchPhaseTwoDefaults() {
         let store = LocalSettingsStore(defaults: defaults)
 

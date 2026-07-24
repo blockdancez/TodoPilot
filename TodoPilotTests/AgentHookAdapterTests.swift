@@ -83,6 +83,48 @@ final class AgentHookAdapterTests: XCTestCase {
         XCTAssertEqual(envelope.workspaceName, "Workspace Name")
     }
 
+    func testCodexAttachmentWrapperUsesActualRequestAsTitle() throws {
+        let prompt = """
+        # Files mentioned by the user:
+
+        ## example.png: /private/tmp/example.png
+
+        ## My request for Codex:
+        修复 OCR 弹框的额度展示
+        """
+        let envelope = try makeAdapter().envelope(
+            from: jsonData([
+                "hook_event_name": "UserPromptSubmit",
+                "thread_id": "thread-with-attachment",
+                "turn_id": "turn-with-attachment",
+                "prompt": prompt
+            ]),
+            provider: .codex
+        )
+
+        XCTAssertEqual(envelope.title, "修复 OCR 弹框的额度展示")
+        let encoded = String(decoding: try encodedEnvelope(envelope), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("Files mentioned by the user"))
+        XCTAssertFalse(encoded.contains("/private/tmp/example.png"))
+    }
+
+    func testIncompleteCodexAttachmentWrapperDoesNotUseAttachmentMetadataAsTitle() throws {
+        let envelope = try makeAdapter().envelope(
+            from: jsonData([
+                "hook_event_name": "UserPromptSubmit",
+                "thread_id": "thread-with-incomplete-attachment",
+                "turn_id": "turn-with-incomplete-attachment",
+                "prompt": "# Files mentioned by the user:\n\n## example.png: /private/tmp/example.png"
+            ]),
+            provider: .codex
+        )
+
+        XCTAssertNil(envelope.title)
+        let encoded = String(decoding: try encodedEnvelope(envelope), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("Files mentioned by the user"))
+        XCTAssertFalse(encoded.contains("/private/tmp/example.png"))
+    }
+
     func testCodexStopMapsToCompletedForMatchingTurn() throws {
         let envelope = try makeAdapter().envelope(
             from: jsonData([

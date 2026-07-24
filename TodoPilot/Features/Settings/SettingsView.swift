@@ -2,6 +2,18 @@ import AppKit
 import Carbon
 import SwiftUI
 
+enum AppVersionPresentation {
+    static func displayVersion(
+        infoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]
+    ) -> String {
+        guard let version = infoDictionary["CFBundleShortVersionString"] as? String else {
+            return "—"
+        }
+        let normalizedVersion = version.trimmingCharacters(in: .whitespacesAndNewlines)
+        return normalizedVersion.isEmpty ? "—" : "v\(normalizedVersion)"
+    }
+}
+
 struct SettingsView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @EnvironmentObject private var settingsStore: LocalSettingsStore
@@ -148,6 +160,18 @@ struct SettingsView: View {
                     .labelsHidden()
                     .pickerStyle(.segmented)
                     .frame(width: 210)
+                }
+
+                SettingsRule()
+
+                SettingsRow(
+                    title: text(copy, en: "App version", zh: "应用版本"),
+                    subtitle: text(copy, en: "The version currently installed on this Mac.", zh: "当前安装在这台 Mac 上的版本。")
+                ) {
+                    SettingsStatusPill(
+                        title: AppVersionPresentation.displayVersion(),
+                        style: .neutral
+                    )
                 }
 
                 SettingsRule()

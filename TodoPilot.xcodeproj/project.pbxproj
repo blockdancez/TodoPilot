@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		0115C90A6CA44E3EA2A48802 /* CalendarImportRefreshPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0115C90B6CA44E3EA2A48802 /* CalendarImportRefreshPolicyTests.swift */; };
 		02AC3DDF8D2B7B338A55CE0E /* TodoTask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 914A62E145459557638C42A9 /* TodoTask.swift */; };
 		04661A77B5DE815982F3FA0B /* AgentIntegrationStatus.swift in Sources */ = {isa = PBXBuildFile; fileRef = D5683CB774CED724F32D45E6 /* AgentIntegrationStatus.swift */; };
 		07EB1761F93BE9D144E310B8 /* TaskStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 912F0EDBD226E7DCD715D16D /* TaskStore.swift */; };
@@ -16,6 +15,8 @@
 		0F2B0ECCEBEB992AD23339C0 /* TodoPilotAgentHookMain.swift in Sources */ = {isa = PBXBuildFile; fileRef = C27DD4E9645046FFDED9172E /* TodoPilotAgentHookMain.swift */; };
 		0F54C6FE3EF1864B3B43EF18 /* AgentProviderIconResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = DAAD6AFAAAB5A1A1ACCB9D1F /* AgentProviderIconResolver.swift */; };
 		0F64D359447FAA7EE26D92C1 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1DEFB1BE7B36609E545C3D9B /* SettingsView.swift */; };
+		11BB1E3F873C2904205ED7B4 /* TaskSourceTabLayoutPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 804BEF5334EF47DC7AB723A5 /* TaskSourceTabLayoutPolicy.swift */; };
+		11E67AC278F4715D2DC2562C /* TaskSourceTabLayoutPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3F4F5F0C0C329E6D3159462A /* TaskSourceTabLayoutPolicyTests.swift */; };
 		13993C37A11F1B1A5D225205 /* AgentBridgeServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A949763E741F0384CA4B0DC /* AgentBridgeServer.swift */; };
 		180D2372014D3BC1606CA5DB /* LocalMigrationCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE4359E1A210C22D3E50BA06 /* LocalMigrationCoordinator.swift */; };
 		18FE915BE393C7726D075393 /* AgentRunStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 68FF14727B42EC7D7A983F46 /* AgentRunStore.swift */; };
@@ -25,6 +26,7 @@
 		29B6FB709BD6405F50384AAA /* AgentMonitorCoordinatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE6C44192C530CDA4A2756C7 /* AgentMonitorCoordinatorTests.swift */; };
 		2BDB98C08FBE6E1690A62084 /* AgentIntegrationStatusTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EE435CA008AE625622336B3 /* AgentIntegrationStatusTests.swift */; };
 		3275A02FD8110712D9AECF01 /* AgentHookEnvelopeV1.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C891A72990E08B4C9BFD838 /* AgentHookEnvelopeV1.swift */; };
+		345FA2624B5292E62C075A29 /* CalendarImportRefreshPolicyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C65D6C507832AC6321173BD5 /* CalendarImportRefreshPolicyTests.swift */; };
 		3E9E596D8943A77BBF6BEE42 /* UnixDomainSocketClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CCF2A7AE96DA1EA71E4C45D1 /* UnixDomainSocketClient.swift */; };
 		3F3B35E9A22FF99F920D00EE /* AgentApplicationActivator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7731DADD553184FAD985F052 /* AgentApplicationActivator.swift */; };
 		4020B89FB43D3A3295C6C5A4 /* THIRD_PARTY_BRAND_ASSETS.md in Resources */ = {isa = PBXBuildFile; fileRef = BAE5A24237005B7BA6E1A913 /* THIRD_PARTY_BRAND_ASSETS.md */; };
@@ -105,7 +107,6 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		0115C90B6CA44E3EA2A48802 /* CalendarImportRefreshPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarImportRefreshPolicyTests.swift; sourceTree = "<group>"; };
 		0409B0A967641F7F83109879 /* LocalMigrationCoordinatorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalMigrationCoordinatorTests.swift; sourceTree = "<group>"; };
 		063FD7D18EFE9541CF5E241F /* TodoPilot-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "TodoPilot-Bridging-Header.h"; sourceTree = "<group>"; };
 		0AA431532EAAFF19299EF93C /* TodoPilotAgentHook */ = {isa = PBXFileReference; includeInIndex = 0; path = TodoPilotAgentHook; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -124,6 +125,7 @@
 		2ED45D8520B46FB329CC301A /* AgentProviderDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProviderDetector.swift; sourceTree = "<group>"; };
 		2FD11A0B6A0FABB0A295F809 /* TelemetryClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TelemetryClient.swift; sourceTree = "<group>"; };
 		3C8237F90BB3609BA58740D1 /* AsyncTimeout.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncTimeout.swift; sourceTree = "<group>"; };
+		3F4F5F0C0C329E6D3159462A /* TaskSourceTabLayoutPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskSourceTabLayoutPolicyTests.swift; sourceTree = "<group>"; };
 		41F784DF7CA2F7EF7D44C7D6 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		451BFC2CE2811F70B663DBD9 /* AgentCompletionReminderQueue.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentCompletionReminderQueue.swift; sourceTree = "<group>"; };
 		49446730CC4E822BDDA1867F /* CalendarImportService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarImportService.swift; sourceTree = "<group>"; };
@@ -141,6 +143,7 @@
 		7930B0F96076BA9B69B9FB12 /* TodoPilotUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TodoPilotUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		793DCBA4F696688CD2F6113D /* AppDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
 		7FAFC67E8E499C5C5BDCED3B /* AppLocalization.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppLocalization.swift; sourceTree = "<group>"; };
+		804BEF5334EF47DC7AB723A5 /* TaskSourceTabLayoutPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskSourceTabLayoutPolicy.swift; sourceTree = "<group>"; };
 		82FCB5CBCCBA917FE8A4B09C /* AgentHookInstaller.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookInstaller.swift; sourceTree = "<group>"; };
 		84101740244058DF0D3C3FAA /* VisionTextRequestPerformer.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = VisionTextRequestPerformer.h; sourceTree = "<group>"; };
 		84C7F14C88835E8AE33E5890 /* AgentBridgeServerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentBridgeServerTests.swift; sourceTree = "<group>"; };
@@ -159,6 +162,7 @@
 		BAE5A24237005B7BA6E1A913 /* THIRD_PARTY_BRAND_ASSETS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THIRD_PARTY_BRAND_ASSETS.md; sourceTree = "<group>"; };
 		BF303D59C1EB68C92A2A8D0B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		C27DD4E9645046FFDED9172E /* TodoPilotAgentHookMain.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoPilotAgentHookMain.swift; sourceTree = "<group>"; };
+		C65D6C507832AC6321173BD5 /* CalendarImportRefreshPolicyTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CalendarImportRefreshPolicyTests.swift; sourceTree = "<group>"; };
 		C755B5D126D244AE1C620A98 /* AgentHookRuntimePath.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookRuntimePath.swift; sourceTree = "<group>"; };
 		CCF2A7AE96DA1EA71E4C45D1 /* UnixDomainSocketClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnixDomainSocketClient.swift; sourceTree = "<group>"; };
 		CEDAA29298D839807817D9E2 /* AgentOnboardingPresentationPolicy.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentOnboardingPresentationPolicy.swift; sourceTree = "<group>"; };
@@ -194,7 +198,6 @@
 		0A862146442C2E9F36CC4871 /* TodoPilotTests */ = {
 			isa = PBXGroup;
 			children = (
-				0115C90B6CA44E3EA2A48802 /* CalendarImportRefreshPolicyTests.swift */,
 				84C7F14C88835E8AE33E5890 /* AgentBridgeServerTests.swift */,
 				B22121C42659CAB184DA2211 /* AgentCompletionReminderQueueTests.swift */,
 				DB234B0144047838AB2036E0 /* AgentHookAdapterTests.swift */,
@@ -204,11 +207,13 @@
 				DFD565E09FD6200FED35D94F /* AgentOnboardingPresentationPolicyTests.swift */,
 				EC1ADB5801E4330C89890160 /* AgentRunStoreTests.swift */,
 				126070CEB1419833DC40F9B1 /* AsyncTimeoutTests.swift */,
+				C65D6C507832AC6321173BD5 /* CalendarImportRefreshPolicyTests.swift */,
 				0409B0A967641F7F83109879 /* LocalMigrationCoordinatorTests.swift */,
 				F677AEF622935C21F09A17DF /* LocalSettingsStoreTests.swift */,
 				FA98C5A2C13A93160AE065FB /* OCRTaskDraftPrefillTests.swift */,
 				229F1B82DA10A53131EF3243 /* ReminderSchedulerTests.swift */,
 				DB1F62B4375CB0941471F38C /* TaskDataExporterTests.swift */,
+				3F4F5F0C0C329E6D3159462A /* TaskSourceTabLayoutPolicyTests.swift */,
 				269511417D9BA6C456D687D4 /* TaskStoreTests.swift */,
 			);
 			path = TodoPilotTests;
@@ -476,6 +481,7 @@
 		E803FBDB6349D0A3CF6D614A /* TodayList */ = {
 			isa = PBXGroup;
 			children = (
+				804BEF5334EF47DC7AB723A5 /* TaskSourceTabLayoutPolicy.swift */,
 				DF41501C19BB343ED1334735 /* TodayListView.swift */,
 			);
 			path = TodayList;
@@ -708,6 +714,7 @@
 				79B221A9C06D32A63CD5024B /* StatusIslandPreview.swift in Sources */,
 				BF69BA923299D417E501DA59 /* StatusIslandWindowController.swift in Sources */,
 				46D9408CE466ADC102042DBF /* TaskDataExporter.swift in Sources */,
+				11BB1E3F873C2904205ED7B4 /* TaskSourceTabLayoutPolicy.swift in Sources */,
 				07EB1761F93BE9D144E310B8 /* TaskStore.swift in Sources */,
 				C731633E972EC776ED96B91A /* TelemetryClient.swift in Sources */,
 				FED2683FE4B1E2CB3A75E28A /* TodayListView.swift in Sources */,
@@ -724,7 +731,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				0115C90A6CA44E3EA2A48802 /* CalendarImportRefreshPolicyTests.swift in Sources */,
 				AAB07F7FC18A59DD47974B4D /* AgentBridgeServerTests.swift in Sources */,
 				0D25F296475F52994A5B3A3E /* AgentCompletionReminderQueueTests.swift in Sources */,
 				EC75C19646799171A01F7E8A /* AgentHookAdapter.swift in Sources */,
@@ -737,11 +743,13 @@
 				D1A48840FC0DEBEB39BCA0E9 /* AgentOnboardingPresentationPolicyTests.swift in Sources */,
 				9BF842A0ED312D1B4EDBCF9C /* AgentRunStoreTests.swift in Sources */,
 				B470D10CE7775632576A6D3D /* AsyncTimeoutTests.swift in Sources */,
+				345FA2624B5292E62C075A29 /* CalendarImportRefreshPolicyTests.swift in Sources */,
 				7D96563C797B93432C2EFC54 /* LocalMigrationCoordinatorTests.swift in Sources */,
 				4E4553644E1902F9949D7BAC /* LocalSettingsStoreTests.swift in Sources */,
 				D9C20D6E71C116CCE1F6F004 /* OCRTaskDraftPrefillTests.swift in Sources */,
 				97739941A75ECC6D646BAF51 /* ReminderSchedulerTests.swift in Sources */,
 				CB7DC1DBBA96786F58C14223 /* TaskDataExporterTests.swift in Sources */,
+				11E67AC278F4715D2DC2562C /* TaskSourceTabLayoutPolicyTests.swift in Sources */,
 				64892D152A8B65C6C471AA32 /* TaskStoreTests.swift in Sources */,
 				8206F35660BCA8CDBE12E66D /* UnixDomainSocketClient.swift in Sources */,
 			);
@@ -882,6 +890,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.fubb.TodoPilot;
 				PRODUCT_NAME = TodoPilot;
 				SDKROOT = macosx;
@@ -1013,6 +1022,7 @@
 					"$(inherited)",
 					"@executable_path/../Frameworks",
 				);
+				MARKETING_VERSION = 1.0.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.fubb.TodoPilot;
 				PRODUCT_NAME = TodoPilot;
 				SDKROOT = macosx;

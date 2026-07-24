@@ -817,26 +817,28 @@ private struct TaskSourceTabBar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 44) {
+            HStack(spacing: TaskSourceTabLayoutPolicy.spacing) {
                 ForEach(TaskSourceTab.allCases) { tab in
+                    let title = tab.title(environment.copy)
+                    let tabWidth = TaskSourceTabLayoutPolicy.width(for: title)
                     Button {
                         selectedTab = tab
                     } label: {
                         VStack(spacing: 12) {
-                            Text(tab.title(environment.copy))
+                            Text(title)
                                 .font(.system(size: 14, weight: selectedTab == tab ? .bold : .semibold))
                                 .foregroundStyle(selectedTab == tab ? TodoPilotTheme.accent : TodoPilotTheme.primaryText)
                                 .lineLimit(1)
-                                .frame(width: 70)
+                                .frame(width: tabWidth)
 
                             Rectangle()
                                 .fill(selectedTab == tab ? TodoPilotTheme.accent : Color.clear)
-                                .frame(width: 70, height: 2)
+                                .frame(width: tabWidth, height: 2)
                         }
                         .animation(.easeOut(duration: 0.16), value: selectedTab == tab)
                     }
                     .buttonStyle(.plain)
-                    .help(tab.title(environment.copy))
+                    .help(title)
                 }
             }
             .padding(.leading, 8)
