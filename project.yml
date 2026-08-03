@@ -23,8 +23,8 @@ targets:
         CFBundleDisplayName: TodoPilot
         CFBundleIdentifier: $(PRODUCT_BUNDLE_IDENTIFIER)
         CFBundleName: $(PRODUCT_NAME)
-        CFBundleShortVersionString: 0.1.0
-        CFBundleVersion: "1"
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         LSMinimumSystemVersion: $(MACOSX_DEPLOYMENT_TARGET)
         NSHumanReadableCopyright: Copyright 2026 TodoPilot
         NSCalendarsFullAccessUsageDescription: TodoPilot reads today's local calendar events to suggest task candidates when Calendar import refreshes.
@@ -38,8 +38,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.fubb.TodoPilot
         PRODUCT_NAME: TodoPilot
-        MARKETING_VERSION: 1.0.0
-        CURRENT_PROJECT_VERSION: 1
+        MARKETING_VERSION: 1.0.1
+        CURRENT_PROJECT_VERSION: 2
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_HARDENED_RUNTIME: YES
         SWIFT_OBJC_BRIDGING_HEADER: TodoPilot/TodoPilot-Bridging-Header.h

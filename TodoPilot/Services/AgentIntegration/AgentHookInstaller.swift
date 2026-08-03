@@ -101,7 +101,7 @@ struct AgentHookInstaller {
     }
 
     func hasInstalledHook(for provider: Provider) -> Bool {
-        guard fileManager.isExecutableFile(atPath: installedHelperURL.path) else {
+        guard installedHelperMatchesBundledVersion() else {
             return false
         }
         let url = configurationURL(for: provider)
@@ -118,6 +118,16 @@ struct AgentHookInstaller {
             guard let entries = hooks[event] as? [Any] else { return false }
             return entries.contains { Self.jsonObjectsEqual($0, ownedEntry) }
         }
+    }
+
+    private func installedHelperMatchesBundledVersion() -> Bool {
+        guard fileManager.isExecutableFile(atPath: helperSourceURL.path),
+              fileManager.isExecutableFile(atPath: installedHelperURL.path),
+              let bundledData = try? Data(contentsOf: helperSourceURL, options: .mappedIfSafe),
+              let installedData = try? Data(contentsOf: installedHelperURL, options: .mappedIfSafe) else {
+            return false
+        }
+        return bundledData == installedData
     }
 
     func install() throws -> InstallationResult {

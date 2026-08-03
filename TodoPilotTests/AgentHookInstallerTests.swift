@@ -65,16 +65,22 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertEqual(nestedHookCount(in: claude, event: "Stop"), 2)
         XCTAssertEqual(nestedHookCount(in: claude, event: "StopFailure"), 1)
         XCTAssertEqual(nestedHookCount(in: claude, event: "SessionEnd"), 1)
+        XCTAssertEqual(nestedHookCount(in: claude, event: "SubagentStart"), 0)
+        XCTAssertEqual(nestedHookCount(in: claude, event: "SubagentStop"), 0)
 
         let codex = try readJSON(codexURL)
         XCTAssertEqual(nestedHookCount(in: codex, event: "UserPromptSubmit"), 1)
         XCTAssertEqual(nestedHookCount(in: codex, event: "Stop"), 1)
+        XCTAssertEqual(nestedHookCount(in: codex, event: "SubagentStart"), 0)
+        XCTAssertEqual(nestedHookCount(in: codex, event: "SubagentStop"), 0)
         XCTAssertEqual(firstNestedTimeout(in: codex, event: "Stop"), 2)
 
         let cursor = try readJSON(cursorURL)
         XCTAssertEqual(cursorHookCount(in: cursor, event: "beforeSubmitPrompt"), 1)
         XCTAssertEqual(cursorHookCount(in: cursor, event: "stop"), 2)
         XCTAssertEqual(cursorHookCount(in: cursor, event: "sessionEnd"), 1)
+        XCTAssertEqual(cursorHookCount(in: cursor, event: "subagentStart"), 0)
+        XCTAssertEqual(cursorHookCount(in: cursor, event: "subagentStop"), 0)
         XCTAssertTrue(cursorEntries(in: cursor, event: "sessionEnd").contains { entry in
             (entry["timeout"] as? Int) == 2
         })
@@ -94,6 +100,23 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertEqual(backupCount(nextTo: claudeURL), 1)
         XCTAssertEqual(backupCount(nextTo: codexURL), 1)
         XCTAssertEqual(backupCount(nextTo: cursorURL), 1)
+    }
+
+    func testInstalledHookRequiresHelperToMatchBundledVersion() throws {
+        let installer = makeInstaller()
+        _ = try installer.install(providers: [.codex])
+        XCTAssertTrue(installer.hasInstalledHook(for: .codex))
+
+        try Data("updated test helper".utf8).write(to: helperSourceURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: helperSourceURL.path
+        )
+
+        XCTAssertFalse(installer.hasInstalledHook(for: .codex))
+
+        _ = try installer.install(providers: [.codex])
+        XCTAssertTrue(installer.hasInstalledHook(for: .codex))
     }
 
     func testCorruptJSONRejectsInstallBeforeAnyMutation() throws {

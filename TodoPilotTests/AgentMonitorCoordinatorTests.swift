@@ -22,6 +22,39 @@ final class AgentMonitorCoordinatorTests: XCTestCase {
         XCTAssertEqual(system.queue.items.count, 1)
     }
 
+    func testCodexContinuationForCompletedTurnDoesNotCreateAnotherTask() throws {
+        let system = makeSystem()
+        let sessionHash = String(repeating: "a", count: 64)
+        let turnHash = String(repeating: "1", count: 64)
+
+        system.coordinator.handle(envelope(
+            event: .started,
+            title: "Original root request",
+            sessionHash: sessionHash,
+            turnHash: turnHash
+        ))
+        system.coordinator.handle(envelope(
+            event: .completed,
+            sessionHash: sessionHash,
+            turnHash: turnHash
+        ))
+        system.coordinator.handle(envelope(
+            event: .started,
+            title: "Synthetic continuation",
+            sessionHash: sessionHash,
+            turnHash: turnHash
+        ))
+
+        let task = try XCTUnwrap(system.taskStore.tasks.first)
+        XCTAssertEqual(system.taskStore.tasks.count, 1)
+        XCTAssertEqual(task.title, "Original root request")
+        XCTAssertEqual(task.status, .done)
+        XCTAssertEqual(system.runStore.runs.count, 1)
+        XCTAssertEqual(system.runStore.runs.first?.state, .terminal)
+        XCTAssertEqual(system.runStore.runs.first?.outcome, .completed)
+        XCTAssertEqual(system.queue.items.count, 1)
+    }
+
     func testNewCodexTurnInSameSessionCancelsInterruptedPreviousTurn() throws {
         let system = makeSystem()
         let firstTurnHash = String(repeating: "1", count: 64)

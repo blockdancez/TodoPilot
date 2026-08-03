@@ -143,7 +143,8 @@ final class AppEnvironment: ObservableObject {
             environment.configureAgentLifecycleObservation()
             environment.agentMonitorCoordinator.recoverAfterUnexpectedTermination()
             environment.refreshAgentIntegrationStatus()
-            if settingsStore.settings.agentMonitoringEnabled {
+            if settingsStore.settings.agentMonitoringEnabled,
+               environment.hasInstalledAgentProvider {
                 environment.agentMonitorCoordinator.start()
             }
             environment.startDueTaskReminderSchedulerIfNeeded()

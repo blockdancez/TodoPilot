@@ -51,9 +51,9 @@ final class LocalSettingsStoreTests: XCTestCase {
     func testAppVersionPresentationUsesMarketingVersionFromBundleMetadata() {
         XCTAssertEqual(
             AppVersionPresentation.displayVersion(infoDictionary: [
-                "CFBundleShortVersionString": "1.0.0"
+                "CFBundleShortVersionString": "1.0.1"
             ]),
-            "v1.0.0"
+            "v1.0.1"
         )
         XCTAssertEqual(
             AppVersionPresentation.displayVersion(infoDictionary: [:]),

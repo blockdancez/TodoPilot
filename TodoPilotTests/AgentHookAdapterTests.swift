@@ -64,6 +64,39 @@ final class AgentHookAdapterTests: XCTestCase {
         }
     }
 
+    func testClaudeSubagentPromptIsRejectedUsingOfficialAgentIdentifier() throws {
+        let payload: [String: Any] = [
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-root",
+            "prompt_id": "prompt-child",
+            "prompt": "synthetic child instruction",
+            "agent_id": "agent-child",
+            "agent_type": "Explore"
+        ]
+
+        XCTAssertThrowsError(
+            try makeAdapter().envelope(from: jsonData(payload), provider: .claudeCode)
+        ) { error in
+            XCTAssertEqual(error as? AgentHookAdapterError, .unsupportedEvent)
+        }
+    }
+
+    func testClaudeRootCustomAgentNamedWorkerIsAcceptedWithoutAgentIdentifier() throws {
+        let envelope = try makeAdapter().envelope(
+            from: jsonData([
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "session-root",
+                "prompt_id": "prompt-root",
+                "prompt": "root instruction",
+                "agent_type": "worker"
+            ]),
+            provider: .claudeCode
+        )
+
+        XCTAssertEqual(envelope.event, .started)
+        XCTAssertEqual(envelope.title, "root instruction")
+    }
+
     func testCodexUsesThreadAndTurnIdentifiers() throws {
         let envelope = try makeAdapter().envelope(
             from: jsonData([
@@ -81,6 +114,27 @@ final class AgentHookAdapterTests: XCTestCase {
         XCTAssertEqual(envelope.turnHash, AgentHookAdapter.sha256("turn-456"))
         XCTAssertEqual(envelope.title, "Review the installer")
         XCTAssertEqual(envelope.workspaceName, "Workspace Name")
+    }
+
+    func testCodexRootPromptTextIsNotUsedAsASubagentHeuristic() throws {
+        for prompt in ["# Overview", "You are an expert at synthetic review"] {
+            let envelope = try makeAdapter().envelope(
+                from: jsonData([
+                    "hook_event_name": "UserPromptSubmit",
+                    "session_id": "session-root",
+                    "turn_id": "turn-root-\(prompt)",
+                    "prompt": prompt,
+                    "cwd": "/tmp/project",
+                    "model": "synthetic-model",
+                    "permission_mode": "default",
+                    "transcript_path": "/tmp/synthetic-transcript.jsonl"
+                ]),
+                provider: .codex
+            )
+
+            XCTAssertEqual(envelope.event, .started)
+            XCTAssertEqual(envelope.title, prompt)
+        }
     }
 
     func testCodexAttachmentWrapperUsesActualRequestAsTitle() throws {
@@ -140,6 +194,23 @@ final class AgentHookAdapterTests: XCTestCase {
         XCTAssertEqual(envelope.turnHash, AgentHookAdapter.sha256("turn-456"))
     }
 
+    func testCodexPromptFromAmbientSubagentIsRejected() throws {
+        let payload: [String: Any] = [
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "session-root",
+            "turn_id": "turn-child",
+            "prompt": "synthetic child instruction",
+            "agent_id": "agent-child",
+            "agent_type": "ambient"
+        ]
+
+        XCTAssertThrowsError(
+            try makeAdapter().envelope(from: jsonData(payload), provider: .codex)
+        ) { error in
+            XCTAssertEqual(error as? AgentHookAdapterError, .unsupportedEvent)
+        }
+    }
+
     func testCursorStopStatusMapsToTerminalEvent() throws {
         let cases: [(String, AgentHookEvent)] = [
             ("completed", .completed),
@@ -178,11 +249,52 @@ final class AgentHookAdapterTests: XCTestCase {
                     "hook_event_name": "sessionEnd",
                     "conversation_id": "cursor-conversation",
                     "generation_id": "generation",
-                    "reason": reason
+                    "reason": reason,
+                    "is_background_agent": false
                 ]),
                 provider: .cursor
             )
             XCTAssertEqual(envelope.event, expectedEvent)
+        }
+    }
+
+    func testCursorBackgroundSessionEndIsRejected() throws {
+        let payload: [String: Any] = [
+            "hook_event_name": "sessionEnd",
+            "conversation_id": "background-conversation",
+            "reason": "completed",
+            "is_background_agent": true
+        ]
+
+        XCTAssertThrowsError(
+            try makeAdapter().envelope(from: jsonData(payload), provider: .cursor)
+        ) { error in
+            XCTAssertEqual(error as? AgentHookAdapterError, .unsupportedEvent)
+        }
+    }
+
+    func testCursorPromptWithExplicitSubagentMetadataIsRejected() throws {
+        let metadataCases: [[String: Any]] = [
+            ["is_parallel_worker": true],
+            ["parent_conversation_id": "parent-conversation"],
+            ["subagent_id": "subagent-child"],
+            ["subagent_type": "generalPurpose"]
+        ]
+
+        for metadata in metadataCases {
+            var payload: [String: Any] = [
+                "hook_event_name": "beforeSubmitPrompt",
+                "conversation_id": "child-conversation",
+                "generation_id": "child-generation",
+                "prompt": "synthetic child instruction"
+            ]
+            metadata.forEach { payload[$0.key] = $0.value }
+
+            XCTAssertThrowsError(
+                try makeAdapter().envelope(from: jsonData(payload), provider: .cursor)
+            ) { error in
+                XCTAssertEqual(error as? AgentHookAdapterError, .unsupportedEvent)
+            }
         }
     }
 

@@ -27,7 +27,7 @@ struct AgentHookAdapter {
         guard let event = normalizedEvent(provider: provider, payload: payload) else {
             throw AgentHookAdapterError.unsupportedEvent
         }
-        guard !Self.isExplicitNestedAgent(payload) else {
+        guard !Self.isExplicitNestedAgent(provider: provider, payload: payload) else {
             throw AgentHookAdapterError.unsupportedEvent
         }
         guard let rawSessionID = sessionIdentifier(provider: provider, payload: payload) else {
@@ -192,19 +192,34 @@ struct AgentHookAdapter {
         }
     }
 
-    private static func isExplicitNestedAgent(_ payload: [String: Any]) -> Bool {
+    private static func isExplicitNestedAgent(
+        provider: AgentHookProvider,
+        payload: [String: Any]
+    ) -> Bool {
+        // Only provider metadata may classify a nested agent. Prompt text is
+        // user-controlled and must never be used as a filtering heuristic.
         if payload["is_subagent"] as? Bool == true {
+            return true
+        }
+        if provider == .cursor,
+           (payload["is_background_agent"] as? Bool == true
+            || payload["is_parallel_worker"] as? Bool == true) {
             return true
         }
         if firstString(in: payload, keys: ["parent_agent_id", "subagent_id"]) != nil {
             return true
         }
-        if let agentType = firstString(in: payload, keys: ["agent_type", "agent_role"])?
-            .lowercased(),
-           agentType.contains("subagent") || agentType == "worker" {
-            return true
+        switch provider {
+        case .claudeCode:
+            return firstString(in: payload, keys: ["agent_id"]) != nil
+        case .codex:
+            return firstString(in: payload, keys: ["agent_id"]) != nil
+        case .cursor:
+            return firstString(
+                in: payload,
+                keys: ["parent_conversation_id", "subagent_id", "subagent_type"]
+            ) != nil
         }
-        return false
     }
 
     static func firstNonemptySanitisedLine(
