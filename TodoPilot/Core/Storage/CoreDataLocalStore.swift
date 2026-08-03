@@ -305,10 +305,11 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
     }
 
     private func replaceTasks(with tasks: [TodoTask]) {
+        let repairedTasks = TodoTaskIdentityRepair.deduplicated(tasks)
         deleteAll(Entity.taskSource)
         deleteAll(Entity.task)
 
-        for task in tasks {
+        for task in repairedTasks {
             insertTask(task)
             insertTaskSource(for: task)
         }

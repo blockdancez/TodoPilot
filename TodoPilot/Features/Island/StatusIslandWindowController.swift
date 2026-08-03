@@ -514,15 +514,23 @@ struct StatusIslandTaskSnapshot {
     private let runsByTaskID: [TodoTask.ID: AgentRun]
 
     init(activeTasks: [TodoTask], runs: [AgentRun]) {
-        let tasksByID = Dictionary(uniqueKeysWithValues: activeTasks.map { ($0.id, $0) })
+        let repairedActiveTasks = TodoTaskIdentityRepair.deduplicated(activeTasks)
+        let tasksByID = repairedActiveTasks.reduce(into: [TodoTask.ID: TodoTask]()) { result, task in
+            result[task.id] = task
+        }
         let activeRuns = runs
             .filter { $0.state == .running }
             .sorted { $0.startedAt < $1.startedAt }
-        let runningAgentTasks = activeRuns.compactMap { tasksByID[$0.taskID] }
-        let runningTaskIDs = Set(runningAgentTasks.map(\.id))
-
+        var runningTaskIDs = Set<TodoTask.ID>()
+        let runningAgentTasks = activeRuns.compactMap { run -> TodoTask? in
+            guard runningTaskIDs.insert(run.taskID).inserted else {
+                return nil
+            }
+            return tasksByID[run.taskID]
+        }
         self.runningAgentTasks = runningAgentTasks
-        self.orderedActiveTasks = runningAgentTasks + activeTasks.filter { !runningTaskIDs.contains($0.id) }
+        self.orderedActiveTasks = runningAgentTasks
+            + repairedActiveTasks.filter { !runningTaskIDs.contains($0.id) }
         self.runsByTaskID = runs.reduce(into: [:]) { result, run in
             if result[run.taskID] == nil {
                 result[run.taskID] = run

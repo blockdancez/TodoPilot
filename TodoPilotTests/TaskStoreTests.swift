@@ -185,6 +185,59 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(restored.tasks.map(\.title), ["Persist me"])
     }
 
+    func testLoadingDuplicateTaskIDsKeepsNewestTaskAndRepairsPersistence() {
+        let taskID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = TodoTask(
+            id: taskID,
+            title: "Older copy",
+            status: .doing,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        let newer = TodoTask(
+            id: taskID,
+            title: "Newest copy",
+            status: .done,
+            createdAt: createdAt,
+            updatedAt: createdAt.addingTimeInterval(30)
+        )
+        let persistence = RecordingTaskStorePersistence(loadedTasks: [older, newer, older])
+
+        let store = TaskStore(seed: [], persistence: persistence)
+
+        XCTAssertEqual(store.tasks, [newer])
+        XCTAssertEqual(persistence.savedSnapshots, [[newer]])
+    }
+
+    func testCoreDataStoreDeduplicatesTaskIDsBeforePersisting() {
+        let persistence = CoreDataLocalStore(
+            inMemory: true,
+            defaults: defaults,
+            migratesLegacyUserDefaults: false
+        )
+        let taskID = UUID()
+        let createdAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = TodoTask(
+            id: taskID,
+            title: "Older copy",
+            status: .doing,
+            createdAt: createdAt,
+            updatedAt: createdAt
+        )
+        let newer = TodoTask(
+            id: taskID,
+            title: "Newest copy",
+            status: .done,
+            createdAt: createdAt,
+            updatedAt: createdAt.addingTimeInterval(30)
+        )
+
+        persistence.save([older, newer, older])
+
+        XCTAssertEqual(persistence.load(), [newer])
+    }
+
     func testImportedTaskDedupesBySourceAndSourceKey() {
         let store = TaskStore(seed: [])
         let dueAt = Date(timeIntervalSince1970: 1_783_074_800)
@@ -696,5 +749,56 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(restored.tasks.first?.source, .codeAgent)
         XCTAssertEqual(restored.tasks.first?.sourceKey, run.id.uuidString)
         XCTAssertEqual(restored.tasks.first?.status, .doing)
+    }
+
+    func testStatusIslandSnapshotToleratesDuplicateTaskIDs() {
+        let taskID = UUID()
+        let startedAt = Date(timeIntervalSince1970: 1_800_000_000)
+        let older = TodoTask(
+            id: taskID,
+            title: "Older title",
+            source: .codeAgent,
+            status: .doing,
+            createdAt: startedAt,
+            updatedAt: startedAt
+        )
+        let newer = TodoTask(
+            id: taskID,
+            title: "Newest title",
+            source: .codeAgent,
+            status: .doing,
+            createdAt: startedAt,
+            updatedAt: startedAt.addingTimeInterval(10)
+        )
+        let run = AgentRun(
+            taskID: taskID,
+            provider: .codex,
+            sessionIdentityHash: "duplicate-task-regression",
+            startedAt: startedAt,
+            lastEventAt: startedAt
+        )
+
+        let snapshot = StatusIslandTaskSnapshot(activeTasks: [older, newer, older], runs: [run])
+
+        XCTAssertEqual(snapshot.runningAgentTasks, [newer])
+        XCTAssertEqual(snapshot.orderedActiveTasks, [newer])
+    }
+}
+
+@MainActor
+private final class RecordingTaskStorePersistence: TaskStorePersistence {
+    private let loadedTasks: [TodoTask]?
+    private(set) var savedSnapshots: [[TodoTask]] = []
+
+    init(loadedTasks: [TodoTask]?) {
+        self.loadedTasks = loadedTasks
+    }
+
+    func load() -> [TodoTask]? {
+        loadedTasks
+    }
+
+    func save(_ tasks: [TodoTask]) {
+        savedSnapshots.append(tasks)
     }
 }

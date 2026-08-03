@@ -33,7 +33,13 @@ final class TaskStore: ObservableObject {
     ) {
         self.persistence = persistence
         self.agentUserOverrideObserver = agentUserOverrideObserver
-        self.tasks = persistence?.load() ?? seed
+        let loadedTasks = persistence?.load()
+        let initialTasks = loadedTasks ?? seed
+        let repairedTasks = TodoTaskIdentityRepair.deduplicated(initialTasks)
+        self.tasks = repairedTasks
+        if let loadedTasks, loadedTasks.count != repairedTasks.count {
+            persistence?.save(repairedTasks)
+        }
     }
 
     var activeTasks: [TodoTask] {
@@ -427,6 +433,28 @@ final class TaskStore: ObservableObject {
         case (.none, .none):
             return lhs.createdAt < rhs.createdAt
         }
+    }
+}
+
+enum TodoTaskIdentityRepair {
+    static func deduplicated(_ tasks: [TodoTask]) -> [TodoTask] {
+        var orderedIDs: [TodoTask.ID] = []
+        var tasksByID: [TodoTask.ID: TodoTask] = [:]
+        orderedIDs.reserveCapacity(tasks.count)
+        tasksByID.reserveCapacity(tasks.count)
+
+        for task in tasks {
+            guard let existing = tasksByID[task.id] else {
+                orderedIDs.append(task.id)
+                tasksByID[task.id] = task
+                continue
+            }
+            if task.updatedAt >= existing.updatedAt {
+                tasksByID[task.id] = task
+            }
+        }
+
+        return orderedIDs.compactMap { tasksByID[$0] }
     }
 }
 

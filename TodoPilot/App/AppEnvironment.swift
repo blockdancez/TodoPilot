@@ -76,8 +76,16 @@ final class AppEnvironment: ObservableObject {
 
     static func bootstrap() -> AppEnvironment {
         let logger = PrivacyLogger()
-        let localStore = CoreDataLocalStore()
-        let settingsStore = LocalSettingsStore()
+        let runsUnderXCTest = Self.isRunningUnderXCTest
+        let bootstrapDefaults = runsUnderXCTest
+            ? UserDefaults(suiteName: "com.fubb.TodoPilotTests.bootstrap.\(ProcessInfo.processInfo.processIdentifier)")!
+            : .standard
+        let localStore = CoreDataLocalStore(
+            inMemory: runsUnderXCTest,
+            defaults: bootstrapDefaults,
+            migratesLegacyUserDefaults: !runsUnderXCTest
+        )
+        let settingsStore = LocalSettingsStore(defaults: bootstrapDefaults)
         let agentRunStore = AgentRunStore(persistence: localStore)
         let taskStore = TaskStore(
             seed: TodoTask.previewTasks,
@@ -138,8 +146,8 @@ final class AppEnvironment: ObservableObject {
             migrationCoordinator: migrationCoordinator,
             hotKeyMonitor: GlobalHotKeyMonitor()
         )
-        environment.registerConfiguredHotKeyIfNeeded()
-        if !Self.isRunningUnderXCTest {
+        if !runsUnderXCTest {
+            environment.registerConfiguredHotKeyIfNeeded()
             environment.configureAgentLifecycleObservation()
             environment.agentMonitorCoordinator.recoverAfterUnexpectedTermination()
             environment.refreshAgentIntegrationStatus()
