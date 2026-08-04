@@ -85,6 +85,8 @@ TodoPilot can install local lifecycle hooks for supported Codex, Claude Code, an
 
 Hook installation updates only the selected provider's local configuration. Existing configuration is validated and preserved, and TodoPilot-owned entries can be removed from Settings.
 
+After an app update or reinstall, TodoPilot automatically refreshes its local helper only when the previously authorized hook entries are still complete. If a provider configuration is missing, incomplete, or incompatible, TodoPilot leaves it unchanged and shows an authorization-and-repair prompt in the main window. Other hooks remain untouched.
+
 ## Project Layout
 
 ```text

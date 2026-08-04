@@ -18,6 +18,7 @@ enum AgentIntegrationOperation: Equatable {
 
     case idle
     case detecting
+    case restoring(Set<Provider>)
     case installing(Set<Provider>)
     case uninstalling(Set<Provider>)
     case testingBridge
@@ -33,6 +34,13 @@ enum AgentIntegrationOperation: Equatable {
         return false
     }
 
+    var isRestoring: Bool {
+        if case .restoring = self {
+            return true
+        }
+        return false
+    }
+
     var isUninstalling: Bool {
         if case .uninstalling = self {
             return true
@@ -42,7 +50,7 @@ enum AgentIntegrationOperation: Equatable {
 
     var providers: Set<Provider> {
         switch self {
-        case let .installing(providers), let .uninstalling(providers):
+        case let .restoring(providers), let .installing(providers), let .uninstalling(providers):
             providers
         case .idle, .detecting, .testingBridge:
             []
@@ -55,6 +63,10 @@ enum AgentIntegrationOperation: Equatable {
 
     func isInstalling(provider: Provider) -> Bool {
         isInstalling && affects(provider)
+    }
+
+    func isRestoring(provider: Provider) -> Bool {
+        isRestoring && affects(provider)
     }
 
     func isUninstalling(provider: Provider) -> Bool {
@@ -109,6 +121,9 @@ enum AgentIntegrationHealthResolver {
     }
 
     static func resolve(_ context: Context) -> AgentIntegrationHealth {
+        if context.operation.isRestoring(provider: context.provider) {
+            return .installing
+        }
         if context.operation.isInstalling(provider: context.provider) {
             return .installing
         }

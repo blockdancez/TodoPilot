@@ -119,6 +119,64 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertTrue(installer.hasInstalledHook(for: .codex))
     }
 
+    func testRestorePreviouslyAuthorizedProvidersRefreshesOnlyTheSharedHelper() throws {
+        let installer = makeInstaller()
+        _ = try installer.install()
+
+        let configurationURLs = AgentHookInstaller.Provider.allCases.map(installer.configurationURL)
+        let originalConfigurations = try Dictionary(uniqueKeysWithValues: configurationURLs.map {
+            ($0, try Data(contentsOf: $0))
+        })
+
+        try Data("updated test helper".utf8).write(to: helperSourceURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: helperSourceURL.path
+        )
+        XCTAssertTrue(AgentHookInstaller.Provider.allCases.allSatisfy {
+            !installer.hasInstalledHook(for: $0)
+        })
+
+        let restored = try installer.restorePreviouslyAuthorizedProviders(
+            Set(AgentHookInstaller.Provider.allCases)
+        )
+
+        XCTAssertEqual(restored, Set(AgentHookInstaller.Provider.allCases))
+        XCTAssertTrue(AgentHookInstaller.Provider.allCases.allSatisfy(installer.hasInstalledHook))
+        XCTAssertEqual(try Data(contentsOf: installer.installedHelperURL), Data("updated test helper".utf8))
+        for url in configurationURLs {
+            XCTAssertEqual(try Data(contentsOf: url), originalConfigurations[url])
+            XCTAssertEqual(backupCount(nextTo: url), 0)
+        }
+    }
+
+    func testRestoreDoesNotRewriteIncompleteAuthorizationConfiguration() throws {
+        let installer = makeInstaller()
+        _ = try installer.install(providers: [.codex])
+
+        let configurationURL = installer.configurationURL(for: .codex)
+        var configuration = try readJSON(configurationURL)
+        var hooks = try XCTUnwrap(configuration["hooks"] as? [String: Any])
+        hooks.removeValue(forKey: "Stop")
+        configuration["hooks"] = hooks
+        try writeJSON(configuration, to: configurationURL)
+        let incompleteConfiguration = try Data(contentsOf: configurationURL)
+        let installedHelper = try Data(contentsOf: installer.installedHelperURL)
+
+        try Data("updated test helper".utf8).write(to: helperSourceURL)
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755],
+            ofItemAtPath: helperSourceURL.path
+        )
+
+        let restored = try installer.restorePreviouslyAuthorizedProviders([.codex])
+
+        XCTAssertTrue(restored.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: configurationURL), incompleteConfiguration)
+        XCTAssertEqual(try Data(contentsOf: installer.installedHelperURL), installedHelper)
+        XCTAssertFalse(installer.hasInstalledHook(for: .codex))
+    }
+
     func testCorruptJSONRejectsInstallBeforeAnyMutation() throws {
         let claudeURL = homeDirectory.appendingPathComponent(".claude/settings.json")
         let codexURL = homeDirectory.appendingPathComponent(".codex/hooks.json")

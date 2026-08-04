@@ -74,6 +74,18 @@ final class AgentOnboardingPresentationPolicyTests: XCTestCase {
         )
     }
 
+    func testAgentStepOffersReauthorizationWhenMonitoringWasEnabledButHooksNeedRepair() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.agentStepState(
+                monitoringEnabled: true,
+                hasCompletedDetection: true,
+                hasDetectedProviders: true,
+                hasProvidersRequiringAuthorization: true
+            ),
+            .readyToInstall
+        )
+    }
+
     func testOnlyNewUsersReceiveAutomaticFirstLaunchGuide() {
         XCTAssertEqual(
             AgentOnboardingPresentationPolicy.presentation(
@@ -84,6 +96,47 @@ final class AgentOnboardingPresentationPolicyTests: XCTestCase {
         XCTAssertNil(
             AgentOnboardingPresentationPolicy.presentation(
                 onboardingCompleted: true
+            )
+        )
+    }
+
+    func testCompletedUserReceivesOneActiveAuthorizationPromptAfterAnUpgradeBreaksMonitoring() {
+        XCTAssertEqual(
+            AgentOnboardingPresentationPolicy.presentation(
+                onboardingCompleted: true,
+                agentMonitoringEnabled: true,
+                hasCompletedDetection: true,
+                hasProvidersRequiringAuthorization: true,
+                hasPresentedAgentRecoveryThisSession: false
+            ),
+            .agentAuthorization
+        )
+        XCTAssertNil(
+            AgentOnboardingPresentationPolicy.presentation(
+                onboardingCompleted: true,
+                agentMonitoringEnabled: true,
+                hasCompletedDetection: true,
+                hasProvidersRequiringAuthorization: true,
+                hasPresentedAgentRecoveryThisSession: true
+            )
+        )
+    }
+
+    func testCompletedUserIsNotPromptedUntilDetectionFinishesOrWhenMonitoringIsDisabled() {
+        XCTAssertNil(
+            AgentOnboardingPresentationPolicy.presentation(
+                onboardingCompleted: true,
+                agentMonitoringEnabled: true,
+                hasCompletedDetection: false,
+                hasProvidersRequiringAuthorization: true
+            )
+        )
+        XCTAssertNil(
+            AgentOnboardingPresentationPolicy.presentation(
+                onboardingCompleted: true,
+                agentMonitoringEnabled: false,
+                hasCompletedDetection: true,
+                hasProvidersRequiringAuthorization: true
             )
         )
     }

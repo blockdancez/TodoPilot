@@ -768,6 +768,11 @@ struct SettingsView: View {
         case "bridge_test_passed": text(copy, en: "TodoPilot's local receiver is available. This does not verify Codex trust; submit a new Codex turn next.", zh: "TodoPilot 本地接收器可用；这不代表 Codex 已信任，请继续提交一个新的 Codex 回合。")
         case "bridge_test_failed": text(copy, en: "Local bridge is unavailable. Enable monitoring or repair the hooks.", zh: "本地 Bridge 不可用，请启用监控或修复 Hook。")
         case "authorization_required": text(copy, en: "Install at least one provider hook before enabling monitoring.", zh: "启用监控前，请先安装至少一个 Provider Hook。")
+        case "authorization_required_after_update": text(
+            copy,
+            en: "Monitoring needs authorization after the app update or reinstall. Authorize and repair the affected providers below.",
+            zh: "应用更新或重装后，Agent 监控需要重新授权；请在下方授权并修复受影响的 Provider。"
+        )
         case "uninstalled": text(copy, en: "TodoPilot-owned hooks were removed.", zh: "TodoPilot 自有 Hook 已移除。")
         case "install_failed": text(copy, en: "Installation failed. Existing configuration was not overwritten.", zh: "安装失败，现有配置未被覆盖。")
         case "upgrade_required": text(copy, en: "Upgrade this Agent before installing TodoPilot hooks.", zh: "请先升级 Agent，再安装 TodoPilot Hook。")

@@ -150,11 +150,7 @@ final class AppEnvironment: ObservableObject {
             environment.registerConfiguredHotKeyIfNeeded()
             environment.configureAgentLifecycleObservation()
             environment.agentMonitorCoordinator.recoverAfterUnexpectedTermination()
-            environment.refreshAgentIntegrationStatus()
-            if settingsStore.settings.agentMonitoringEnabled,
-               environment.hasInstalledAgentProvider {
-                environment.agentMonitorCoordinator.start()
-            }
+            environment.restoreAuthorizedAgentMonitoringOnLaunch()
             environment.startDueTaskReminderSchedulerIfNeeded()
         }
         return environment
@@ -173,6 +169,19 @@ final class AppEnvironment: ObservableObject {
 
     var hasInstalledAgentProvider: Bool {
         AgentHookInstaller.Provider.allCases.contains(where: agentHookInstaller.hasInstalledHook)
+    }
+
+    var agentProvidersRequiringAuthorization: [AgentHookInstaller.Provider] {
+        guard settingsStore.settings.agentMonitoringEnabled else { return [] }
+        return AgentHookInstaller.Provider.allCases.filter { provider in
+            guard agentProviderSetting(provider),
+                  let detection = agentIntegrationSnapshots[provider]?.detection,
+                  detection.compatibility != .needsUpgrade,
+                  detection.executableURL != nil || detection.configurationPresent else {
+                return false
+            }
+            return !agentHookInstaller.hasInstalledHook(for: provider)
+        }
     }
 
     func registerConfiguredHotKeyIfNeeded() {
@@ -276,6 +285,48 @@ final class AppEnvironment: ObservableObject {
         }
     }
 
+    func restoreAuthorizedAgentMonitoringOnLaunch() {
+        guard settingsStore.settings.agentMonitoringEnabled else {
+            refreshAgentIntegrationStatus()
+            return
+        }
+
+        let enabledProviders = Set(AgentHookInstaller.Provider.allCases.filter(agentProviderSetting))
+        guard !enabledProviders.isEmpty else {
+            refreshAgentIntegrationStatus()
+            return
+        }
+
+        agentIntegrationOperation = .restoring(enabledProviders)
+        let installer = agentHookInstaller
+        Task { [weak self] in
+            let result = await Task.detached(priority: .utility) {
+                Result { try installer.restorePreviouslyAuthorizedProviders(enabledProviders) }
+            }.value
+            guard let self else { return }
+
+            switch result {
+            case let .success(restoredProviders):
+                if !restoredProviders.isEmpty {
+                    agentMonitorCoordinator.start()
+                }
+                if restoredProviders == enabledProviders {
+                    agentIntegrationMessage = nil
+                } else {
+                    agentIntegrationMessage = "authorization_required_after_update"
+                }
+            case let .failure(error):
+                agentIntegrationMessage = "authorization_required_after_update"
+                logger.error("agent_hooks_restore_after_update_failed", metadata: [
+                    "error_type": .publicText(String(describing: type(of: error)))
+                ])
+            }
+
+            agentIntegrationOperation = .idle
+            refreshAgentIntegrationStatus()
+        }
+    }
+
     @discardableResult
     func authorizeAgentMonitoring(providers: Set<AgentHookInstaller.Provider>) async -> Bool {
         guard !providers.isEmpty, !agentIntegrationOperation.isBusy else { return false }
@@ -288,6 +339,9 @@ final class AppEnvironment: ObservableObject {
         switch result {
         case .success:
             for provider in providers { setAgentProviderSetting(provider, enabled: true) }
+            if providers.contains(.codex) {
+                settingsStore.updateCodexHooksTrustConfirmed(false)
+            }
             settingsStore.updateAgentMonitoringEnabled(true)
             agentMonitorCoordinator.start()
             agentIntegrationMessage = "installed"

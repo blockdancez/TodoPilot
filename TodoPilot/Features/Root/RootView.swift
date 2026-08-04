@@ -8,6 +8,7 @@ struct RootView: View {
     @State private var settingsInitialSection: SettingsPane = .general
     @State private var settingsViewIdentity = UUID()
     @State private var onboardingPresentation: AgentOnboardingPresentation?
+    @State private var hasPresentedAgentRecoveryThisSession = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -72,21 +73,28 @@ struct RootView: View {
             environment.registerConfiguredHotKeyIfNeeded()
             reconcileAutomaticOnboardingPresentation()
         }
+        .onChange(of: environment.agentIntegrationSnapshots) {
+            reconcileAutomaticOnboardingPresentation()
+        }
+        .onChange(of: environment.agentIntegrationOperation) {
+            reconcileAutomaticOnboardingPresentation()
+        }
         .sheet(item: $onboardingPresentation, onDismiss: {
             reconcileAutomaticOnboardingPresentation()
-        }) { _ in
+        }) { presentation in
             OnboardingGuideView(
+                presentation: presentation,
                 onFinish: {
-                    finishOnboarding()
+                    finishOnboarding(presentation)
                 },
                 onOpenSettings: {
-                    finishOnboarding()
+                    finishOnboarding(presentation)
                     settingsInitialSection = .general
                     settingsViewIdentity = UUID()
                     selection = .settings
                 },
                 onOpenAgentSettings: {
-                    finishOnboarding()
+                    finishOnboarding(presentation)
                     settingsInitialSection = .agents
                     settingsViewIdentity = UUID()
                     selection = .settings
@@ -102,13 +110,25 @@ struct RootView: View {
             return
         }
         let settings = settingsStore.settings
-        onboardingPresentation = AgentOnboardingPresentationPolicy.presentation(
-            onboardingCompleted: settings.onboardingCompleted
+        let presentation = AgentOnboardingPresentationPolicy.presentation(
+            onboardingCompleted: settings.onboardingCompleted,
+            agentMonitoringEnabled: settings.agentMonitoringEnabled,
+            hasCompletedDetection: environment.agentIntegrationSnapshots.count
+                >= AgentHookInstaller.Provider.allCases.count
+                && environment.agentIntegrationOperation == .idle,
+            hasProvidersRequiringAuthorization: !environment.agentProvidersRequiringAuthorization.isEmpty,
+            hasPresentedAgentRecoveryThisSession: hasPresentedAgentRecoveryThisSession
         )
+        if presentation == .agentAuthorization {
+            hasPresentedAgentRecoveryThisSession = true
+        }
+        onboardingPresentation = presentation
     }
 
-    private func finishOnboarding() {
-        settingsStore.updateOnboardingCompleted(true)
+    private func finishOnboarding(_ presentation: AgentOnboardingPresentation) {
+        if presentation == .firstLaunch {
+            settingsStore.updateOnboardingCompleted(true)
+        }
         onboardingPresentation = nil
     }
 }
@@ -351,6 +371,7 @@ private struct OnboardingGuideView: View {
     @EnvironmentObject private var environment: AppEnvironment
     @EnvironmentObject private var settingsStore: LocalSettingsStore
     @Environment(\.scenePhase) private var scenePhase
+    let presentation: AgentOnboardingPresentation
     let onFinish: () -> Void
     let onOpenSettings: () -> Void
     let onOpenAgentSettings: () -> Void
@@ -360,18 +381,23 @@ private struct OnboardingGuideView: View {
     @State private var permissionCheckFailed = false
 
     init(
+        presentation: AgentOnboardingPresentation,
         onFinish: @escaping () -> Void,
         onOpenSettings: @escaping () -> Void,
         onOpenAgentSettings: @escaping () -> Void
     ) {
+        self.presentation = presentation
         self.onFinish = onFinish
         self.onOpenSettings = onOpenSettings
         self.onOpenAgentSettings = onOpenAgentSettings
-        _step = State(initialValue: .permission)
+        _step = State(initialValue: presentation == .agentAuthorization ? .agents : .permission)
     }
 
     private var availableSteps: [OnboardingStep] {
-        AgentOnboardingPresentationPolicy.firstLaunchSteps(
+        if presentation == .agentAuthorization {
+            return [.agents]
+        }
+        return AgentOnboardingPresentationPolicy.firstLaunchSteps(
             hasDetectedAgentProviders: !environment.detectedAgentProviders.isEmpty
         )
     }
@@ -384,7 +410,8 @@ private struct OnboardingGuideView: View {
         AgentOnboardingPresentationPolicy.agentStepState(
             monitoringEnabled: settingsStore.settings.agentMonitoringEnabled,
             hasCompletedDetection: hasCompletedAgentDetection,
-            hasDetectedProviders: !environment.detectedAgentProviders.isEmpty
+            hasDetectedProviders: !environment.detectedAgentProviders.isEmpty,
+            hasProvidersRequiringAuthorization: !environment.agentProvidersRequiringAuthorization.isEmpty
         )
     }
 
@@ -416,10 +443,14 @@ private struct OnboardingGuideView: View {
         let chrome = AgentOnboardingPresentationPolicy.chrome(for: step)
 
         TodoPilotModalShell(
-            title: chrome == .agentAuthorization
+            title: presentation == .agentAuthorization
+                ? rootText(copy, en: "Restore Code Agent monitoring", zh: "恢复 Code Agent 监控")
+                : chrome == .agentAuthorization
                 ? rootText(copy, en: "Enable Code Agent monitoring", zh: "启用 Code Agent 监控")
                 : rootText(copy, en: "Welcome to TodoPilot", zh: "欢迎使用 TodoPilot"),
-            subtitle: chrome == .agentAuthorization
+            subtitle: presentation == .agentAuthorization
+                ? rootText(copy, en: "TodoPilot detected that previously enabled monitoring needs authorization after the app update or reinstall.", zh: "TodoPilot 检测到应用更新或重装后，之前启用的 Agent 监控需要重新授权。")
+                : chrome == .agentAuthorization
                 ? rootText(copy, en: "Authorize and install once, then TodoPilot can monitor local Code Agent tasks automatically.", zh: "授权安装后，TodoPilot 会自动监听本机 Code Agent 任务。")
                 : rootText(copy, en: "Start with the required macOS permission, then set up the capture-to-today loop.", zh: "先完成 macOS 必需权限，再了解从捕获到今日执行的闭环。"),
             width: 720,
@@ -454,7 +485,9 @@ private struct OnboardingGuideView: View {
                     ? rootText(copy, en: "Not now", zh: "暂不开启")
                     : rootText(copy, en: "Skip", zh: "跳过")) {
                     if step == .agents {
-                        environment.skipAgentOnboarding()
+                        if presentation == .firstLaunch {
+                            environment.skipAgentOnboarding()
+                        }
                         advanceOrFinish()
                     } else {
                         onFinish()
@@ -561,12 +594,20 @@ private struct OnboardingGuideView: View {
                             .foregroundStyle(RootTheme.secondaryText)
                     }
                 case .readyToInstall:
-                    OnboardingBulletList(items: [
-                        rootText(copy, en: "TodoPilot detected: \(detectedProviderNames).", zh: "已检测到：\(detectedProviderNames)。"),
-                        rootText(copy, en: "After authorization, TodoPilot monitors when Code Agent tasks start, finish or need attention.", zh: "授权后，TodoPilot 会监听 Code Agent 任务的开始、完成和异常状态。"),
-                        rootText(copy, en: "Tasks are added to Todo automatically and updated when their status changes.", zh: "任务开始时自动加入 Todo，完成或异常时自动更新并提醒。"),
-                        rootText(copy, en: "You can turn monitoring off or uninstall it anytime in Settings.", zh: "你可以随时在设置中关闭或卸载。")
-                    ])
+                    if presentation == .agentAuthorization {
+                        OnboardingBulletList(items: [
+                            rootText(copy, en: "Needs authorization: \(authorizationProviderNames).", zh: "需要重新授权：\(authorizationProviderNames)。"),
+                            rootText(copy, en: "TodoPilot will repair only its own local helper and exact Hook entries; your other hooks are preserved.", zh: "TodoPilot 只会修复自身的本机 helper 和精确 Hook 条目，不会覆盖你的其他 Hook。"),
+                            rootText(copy, en: "Monitoring and Agent reminders resume after authorization. Codex may also ask you to trust its Hook entries.", zh: "授权后会恢复 Agent 监控和提醒；Codex 还可能要求你信任对应 Hook。")
+                        ])
+                    } else {
+                        OnboardingBulletList(items: [
+                            rootText(copy, en: "TodoPilot detected: \(detectedProviderNames).", zh: "已检测到：\(detectedProviderNames)。"),
+                            rootText(copy, en: "After authorization, TodoPilot monitors when Code Agent tasks start, finish or need attention.", zh: "授权后，TodoPilot 会监听 Code Agent 任务的开始、完成和异常状态。"),
+                            rootText(copy, en: "Tasks are added to Todo automatically and updated when their status changes.", zh: "任务开始时自动加入 Todo，完成或异常时自动更新并提醒。"),
+                            rootText(copy, en: "You can turn monitoring off or uninstall it anytime in Settings.", zh: "你可以随时在设置中关闭或卸载。")
+                        ])
+                    }
                 case .unavailable:
                     OnboardingBulletList(items: [
                         rootText(copy, en: "No supported Code Agent was detected yet.", zh: "暂未检测到支持的 Code Agent。"),
@@ -636,7 +677,9 @@ private struct OnboardingGuideView: View {
             case .detecting:
                 rootText(copy, en: "Detecting…", zh: "检测中…")
             case .readyToInstall:
-                rootText(copy, en: "Authorize & Install", zh: "授权并安装")
+                presentation == .agentAuthorization
+                    ? rootText(copy, en: "Authorize & Repair", zh: "授权并修复")
+                    : rootText(copy, en: "Authorize & Install", zh: "授权并安装")
             case .unavailable, .enabled:
                 rootText(copy, en: "Continue", zh: "继续")
             }
@@ -692,7 +735,7 @@ private struct OnboardingGuideView: View {
             case .unavailable, .enabled:
                 advanceOrFinish()
             case .readyToInstall:
-                let providers = Set(environment.detectedAgentProviders)
+                let providers = Set(authorizationProviders)
                 Task { @MainActor in
                     guard await environment.authorizeAgentMonitoring(providers: providers) else {
                         return
@@ -717,7 +760,7 @@ private struct OnboardingGuideView: View {
             return
         }
         if AgentOnboardingPresentationPolicy.shouldMarkAgentOnboardingSkippedWhenClosing(
-            isShowingAgentStep: step == .agents
+            isShowingAgentStep: step == .agents && presentation == .firstLaunch
         ) {
             environment.skipAgentOnboarding()
         }
@@ -736,6 +779,17 @@ private struct OnboardingGuideView: View {
 
     private var detectedProviderNames: String {
         environment.detectedAgentProviders.map(\.displayName).joined(separator: "、")
+    }
+
+    private var authorizationProviders: [AgentHookInstaller.Provider] {
+        if presentation == .agentAuthorization {
+            return environment.agentProvidersRequiringAuthorization
+        }
+        return environment.detectedAgentProviders
+    }
+
+    private var authorizationProviderNames: String {
+        authorizationProviders.map(\.displayName).joined(separator: "、")
     }
 
     private func refreshScreenRecordingStatus() {

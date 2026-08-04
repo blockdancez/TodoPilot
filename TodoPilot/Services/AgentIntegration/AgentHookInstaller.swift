@@ -104,6 +104,22 @@ struct AgentHookInstaller {
         guard installedHelperMatchesBundledVersion() else {
             return false
         }
+        return hasCompleteOwnedConfiguration(for: provider)
+    }
+
+    func restorePreviouslyAuthorizedProviders(_ providers: Set<Provider>) throws -> Set<Provider> {
+        let authorizedProviders = Set(providers.filter(hasCompleteOwnedConfiguration))
+        guard !authorizedProviders.isEmpty else { return [] }
+        guard fileManager.isExecutableFile(atPath: helperSourceURL.path) else {
+            throw InstallerError.helperMissing(helperSourceURL)
+        }
+        if !installedHelperMatchesBundledVersion() {
+            try installHelperAtomically()
+        }
+        return authorizedProviders
+    }
+
+    private func hasCompleteOwnedConfiguration(for provider: Provider) -> Bool {
         let url = configurationURL(for: provider)
         guard fileManager.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),

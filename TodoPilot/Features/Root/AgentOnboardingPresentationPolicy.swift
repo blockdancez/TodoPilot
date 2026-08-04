@@ -2,6 +2,7 @@ import Foundation
 
 enum AgentOnboardingPresentation: String, Identifiable, Equatable {
     case firstLaunch
+    case agentAuthorization
 
     var id: String { rawValue }
 }
@@ -61,10 +62,11 @@ struct AgentOnboardingPresentationPolicy {
     static func agentStepState(
         monitoringEnabled: Bool,
         hasCompletedDetection: Bool,
-        hasDetectedProviders: Bool
+        hasDetectedProviders: Bool,
+        hasProvidersRequiringAuthorization: Bool = false
     ) -> AgentOnboardingStepState {
         if monitoringEnabled {
-            return .enabled
+            return hasProvidersRequiringAuthorization ? .readyToInstall : .enabled
         }
         guard hasCompletedDetection else {
             return .detecting
@@ -72,8 +74,21 @@ struct AgentOnboardingPresentationPolicy {
         return hasDetectedProviders ? .readyToInstall : .unavailable
     }
 
-    static func presentation(onboardingCompleted: Bool) -> AgentOnboardingPresentation? {
-        onboardingCompleted ? nil : .firstLaunch
+    static func presentation(
+        onboardingCompleted: Bool,
+        agentMonitoringEnabled: Bool = false,
+        hasCompletedDetection: Bool = false,
+        hasProvidersRequiringAuthorization: Bool = false,
+        hasPresentedAgentRecoveryThisSession: Bool = false
+    ) -> AgentOnboardingPresentation? {
+        guard onboardingCompleted else { return .firstLaunch }
+        guard agentMonitoringEnabled,
+              hasCompletedDetection,
+              hasProvidersRequiringAuthorization,
+              !hasPresentedAgentRecoveryThisSession else {
+            return nil
+        }
+        return .agentAuthorization
     }
 
     static func shouldMarkAgentOnboardingSkippedWhenClosing(

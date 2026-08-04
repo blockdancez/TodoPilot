@@ -11,6 +11,13 @@ final class AgentIntegrationStatusTests: XCTestCase {
         XCTAssertTrue(AgentIntegrationOperation.detecting.isBusy)
         XCTAssertTrue(AgentIntegrationOperation.testingBridge.isBusy)
 
+        let restoring = AgentIntegrationOperation.restoring([.claudeCode, .cursor])
+        XCTAssertTrue(restoring.isBusy)
+        XCTAssertTrue(restoring.isRestoring)
+        XCTAssertEqual(restoring.providers, [.claudeCode, .cursor])
+        XCTAssertTrue(restoring.isRestoring(provider: .cursor))
+        XCTAssertFalse(restoring.isRestoring(provider: .codex))
+
         let installing = AgentIntegrationOperation.installing([.claudeCode, .codex])
         XCTAssertTrue(installing.isBusy)
         XCTAssertTrue(installing.isInstalling)
@@ -29,6 +36,14 @@ final class AgentIntegrationStatusTests: XCTestCase {
     }
 
     func testProviderScopedOperationTakesPriorityOnlyForAffectedProvider() {
+        let restoring = context(
+            provider: .claudeCode,
+            operation: .restoring([.claudeCode]),
+            configurationStatus: .invalid,
+            hookInstalled: false
+        )
+        XCTAssertEqual(AgentIntegrationHealthResolver.resolve(restoring), .installing)
+
         let broken = context(
             provider: .codex,
             operation: .installing([.codex]),
