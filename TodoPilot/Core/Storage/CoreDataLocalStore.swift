@@ -2,6 +2,7 @@ import CoreData
 import CoreGraphics
 import CryptoKit
 import Foundation
+import OSLog
 
 struct LocalCaptureSession: Equatable, Identifiable {
     let id: UUID
@@ -47,6 +48,18 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
     private let legacyPersistence: TaskStorePersistence?
     private let defaults: UserDefaults
 
+    private static let performanceLogger = Logger(subsystem: "com.fubb.TodoPilot", category: "storage-performance")
+    private var persistentStoreLoaded = true
+    private var taskLoadFailed = false
+
+    // 仅用于存储回归测试：故障发生在真实 fetch/save 边界，不改变持久化协议。
+    enum PersistenceStage: Equatable {
+        case fetch(String)
+        case save
+    }
+    var persistenceFaultInjector: ((PersistenceStage) throws -> Void)?
+    var storageTestContext: NSManagedObjectContext { context }
+
     init(
         storeURL: URL? = nil,
         inMemory: Bool = false,
@@ -79,7 +92,8 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
             loadError = error
         }
         if let loadError {
-            assertionFailure("Failed to load TodoPilot Core Data store: \(loadError)")
+            persistentStoreLoaded = false
+            Self.logStorageError(loadError)
         }
 
         self.context = container.viewContext
@@ -88,45 +102,81 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
     }
 
     func load() -> [TodoTask]? {
-        let storedTasks = fetchTasks()
-        guard storedTasks.isEmpty else {
-            markInitialized()
-            markLegacyMigrated()
-            return storedTasks
-        }
+        autoreleasepool {
+            guard persistentStoreLoaded else { return nil }
+            do {
+                let storedTasks = try fetchTasks()
+                if !storedTasks.isEmpty {
+                    taskLoadFailed = false
+                    markInitialized()
+                    markLegacyMigrated()
+                    return storedTasks
+                }
 
-        if !defaults.bool(forKey: Keys.legacyMigrationCompleted),
-           let legacyTasks = legacyPersistence?.load() {
-            replaceTasks(with: legacyTasks)
-            markLegacyMigrated()
-            markInitialized()
-            return legacyTasks
-        }
+                if !defaults.bool(forKey: Keys.legacyMigrationCompleted),
+                   let legacyTasks = legacyPersistence?.load() {
+                    try synchronizeTasks(with: legacyTasks)
+                    taskLoadFailed = false
+                    markLegacyMigrated()
+                    markInitialized()
+                    return legacyTasks
+                }
 
-        if defaults.bool(forKey: Keys.storeInitialized) {
-            return []
+                taskLoadFailed = false
+                return defaults.bool(forKey: Keys.storeInitialized) ? [] : nil
+            } catch {
+                // 读取失败不能被当成空库；成功重载前禁止完整快照覆盖原有任务。
+                context.rollback()
+                taskLoadFailed = true
+                Self.logStorageError(error)
+                return nil
+            }
         }
-
-        return nil
     }
 
     func save(_ tasks: [TodoTask]) {
-        replaceTasks(with: tasks)
-        markInitialized()
-        markLegacyMigrated()
+        let startedAt = ProcessInfo.processInfo.systemUptime
+        var inserted = 0
+        var updated = 0
+        var deleted = 0
+        var noop = true
+        var success = false
+        defer {
+            let durationMS = (ProcessInfo.processInfo.systemUptime - startedAt) * 1_000
+            Self.performanceLogger.info("operation=tasks.save duration_ms=\(durationMS, privacy: .public) total=\(tasks.count, privacy: .public) insert=\(inserted, privacy: .public) update=\(updated, privacy: .public) delete=\(deleted, privacy: .public) noop=\(noop, privacy: .public) success=\(success, privacy: .public)")
+        }
+        autoreleasepool {
+            guard persistentStoreLoaded, !taskLoadFailed else { return }
+            do {
+                try synchronizeTasks(with: tasks) {
+                    context.processPendingChanges()
+                    inserted = context.insertedObjects.count
+                    updated = context.updatedObjects.count
+                    deleted = context.deletedObjects.count
+                    noop = !context.hasChanges
+                }
+                success = true
+                markInitialized()
+                markLegacyMigrated()
+            } catch {
+                context.rollback()
+                Self.logStorageError(error)
+            }
+        }
     }
 
     func startCaptureSession(surface: String, screenCount: Int, startedAt: Date = Date()) -> UUID {
         let id = UUID()
-        let object = NSEntityDescription.insertNewObject(forEntityName: Entity.captureSession, into: context)
-        object.setValue(id, forKey: "localID")
-        object.setValue(startedAt, forKey: "startedAt")
-        object.setValue(nil, forKey: "completedAt")
-        object.setValue("STARTED", forKey: "status")
-        object.setValue(Int64(max(0, screenCount)), forKey: "screenCount")
-        object.setValue(nil, forKey: "selectionHash")
-        object.setValue(surface, forKey: "surface")
-        saveContext()
+        performStorageTransaction {
+            let object = NSEntityDescription.insertNewObject(forEntityName: Entity.captureSession, into: context)
+            object.setValue(id, forKey: "localID")
+            object.setValue(startedAt, forKey: "startedAt")
+            object.setValue(nil, forKey: "completedAt")
+            object.setValue("STARTED", forKey: "status")
+            object.setValue(Int64(max(0, screenCount)), forKey: "screenCount")
+            object.setValue(nil, forKey: "selectionHash")
+            object.setValue(surface, forKey: "surface")
+        }
         return id
     }
 
@@ -158,9 +208,20 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
     }
 
     func loadCaptureSessions() -> [LocalCaptureSession] {
+        autoreleasepool {
+            do { return try fetchCaptureSessions() }
+            catch {
+                context.rollback()
+                Self.logStorageError(error)
+                return []
+            }
+        }
+    }
+
+    private func fetchCaptureSessions() throws -> [LocalCaptureSession] {
         let request = NSFetchRequest<NSManagedObject>(entityName: Entity.captureSession)
         request.sortDescriptors = [NSSortDescriptor(key: "startedAt", ascending: true)]
-        return (try? context.fetch(request))?.compactMap { object in
+        return try fetchRecords(request).compactMap { object in
             guard let id = object.value(forKey: "localID") as? UUID,
                   let startedAt = object.value(forKey: "startedAt") as? Date,
                   let status = object.value(forKey: "status") as? String else {
@@ -174,13 +235,24 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
                 screenCount: Int((object.value(forKey: "screenCount") as? Int64) ?? 0),
                 selectionHash: object.value(forKey: "selectionHash") as? String
             )
-        } ?? []
+        }
     }
 
     func loadAgentRuns() -> [AgentRun] {
+        autoreleasepool {
+            do { return try fetchAgentRuns() }
+            catch {
+                context.rollback()
+                Self.logStorageError(error)
+                return []
+            }
+        }
+    }
+
+    private func fetchAgentRuns() throws -> [AgentRun] {
         let request = NSFetchRequest<NSManagedObject>(entityName: Entity.agentRun)
         request.sortDescriptors = [NSSortDescriptor(key: "startedAt", ascending: true)]
-        return (try? context.fetch(request))?.compactMap { object in
+        return try fetchRecords(request).compactMap { object in
             guard let runID = object.value(forKey: "runID") as? UUID,
                   let taskID = object.value(forKey: "taskID") as? UUID,
                   let providerValue = object.value(forKey: "provider") as? String,
@@ -216,26 +288,26 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
                 userOverride: userOverride,
                 reminderState: reminderState
             )
-        } ?? []
+        }
     }
 
     func saveAgentRun(_ run: AgentRun) {
-        upsertAgentRun(run)
-        saveContext()
+        performStorageTransaction { try upsertAgentRun(run) }
     }
 
     func saveAgentRuns(_ runs: [AgentRun]) {
-        for run in runs {
-            upsertAgentRun(run)
+        performStorageTransaction {
+            for run in runs {
+                try upsertAgentRun(run)
+            }
         }
-        saveContext()
     }
 
-    private func upsertAgentRun(_ run: AgentRun) {
+    private func upsertAgentRun(_ run: AgentRun) throws {
         let request = NSFetchRequest<NSManagedObject>(entityName: Entity.agentRun)
         request.fetchLimit = 1
         request.predicate = NSPredicate(format: "runID == %@", run.id as CVarArg)
-        let object = (try? context.fetch(request).first)
+        let object = try fetchRecords(request).first
             ?? NSEntityDescription.insertNewObject(forEntityName: Entity.agentRun, into: context)
         object.setValue(run.id, forKey: "runID")
         object.setValue(run.taskID, forKey: "taskID")
@@ -255,21 +327,21 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
     }
 
     func deleteAgentRun(_ runID: UUID) {
-        let request = NSFetchRequest<NSManagedObject>(entityName: Entity.agentRun)
-        request.fetchLimit = 1
-        request.predicate = NSPredicate(format: "runID == %@", runID as CVarArg)
-        guard let object = try? context.fetch(request).first else {
-            return
+        performStorageTransaction {
+            let request = NSFetchRequest<NSManagedObject>(entityName: Entity.agentRun)
+            request.fetchLimit = 1
+            request.predicate = NSPredicate(format: "runID == %@", runID as CVarArg)
+            if let object = try fetchRecords(request).first {
+                context.delete(object)
+            }
         }
-        context.delete(object)
-        saveContext()
     }
 
-    private func fetchTasks() -> [TodoTask] {
+    private func fetchTasks() throws -> [TodoTask] {
         let request = NSFetchRequest<NSManagedObject>(entityName: Entity.task)
         request.sortDescriptors = [NSSortDescriptor(key: "createdAt", ascending: true)]
-        let taskRecords = (try? context.fetch(request)) ?? []
-        let sourcesByTaskID = fetchTaskSourcesByTaskID()
+        let taskRecords = try fetchRecords(request)
+        let sourcesByTaskID = try fetchTaskSourcesByTaskID()
 
         return taskRecords.compactMap { object in
             guard let id = object.value(forKey: "localID") as? UUID,
@@ -304,46 +376,74 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
         }
     }
 
-    private func replaceTasks(with tasks: [TodoTask]) {
+    private func synchronizeTasks(with tasks: [TodoTask], beforeSave: () -> Void = {}) throws {
         let repairedTasks = TodoTaskIdentityRepair.deduplicated(tasks)
-        deleteAll(Entity.taskSource)
-        deleteAll(Entity.task)
-
-        for task in repairedTasks {
-            insertTask(task)
-            insertTaskSource(for: task)
+        // 每次保存只建立临时映射；先成功读取两张表，再执行任何变更。
+        let taskRecords = try fetchRecords(NSFetchRequest<NSManagedObject>(entityName: Entity.task))
+        let sourceRecords = try fetchRecords(NSFetchRequest<NSManagedObject>(entityName: Entity.taskSource))
+        let incomingIDs = Set(repairedTasks.map(\.id))
+        var tasksByID: [UUID: NSManagedObject] = [:]
+        var sourcesByTaskID: [UUID: NSManagedObject] = [:]
+        for object in taskRecords {
+            guard let id = object.value(forKey: "localID") as? UUID,
+                  incomingIDs.contains(id), tasksByID[id] == nil else {
+                context.delete(object)
+                continue
+            }
+            tasksByID[id] = object
         }
-        saveContext()
+        for object in sourceRecords {
+            guard let id = object.value(forKey: "taskLocalID") as? UUID,
+                  incomingIDs.contains(id), tasksByID[id] != nil, sourcesByTaskID[id] == nil else {
+                context.delete(object)
+                continue
+            }
+            sourcesByTaskID[id] = object
+        }
+        for task in repairedTasks {
+            let object = tasksByID[task.id]
+                ?? NSEntityDescription.insertNewObject(forEntityName: Entity.task, into: context)
+            updateTask(task, on: object)
+            let source = sourcesByTaskID[task.id]
+                ?? NSEntityDescription.insertNewObject(forEntityName: Entity.taskSource, into: context)
+            if source.value(forKey: "localID") == nil {
+                source.setValue(UUID(), forKey: "localID")
+            }
+            setValueIfChanged(task.id, forKey: "taskLocalID", on: source)
+            setValueIfChanged(task.source.rawValue, forKey: "sourceType", on: source)
+            setValueIfChanged(task.sourceKey, forKey: "sourceHash", on: source)
+            setValueIfChanged(task.sourceQuote, forKey: "sourceQuote", on: source)
+            setValueIfChanged(nil, forKey: "ocrTextRef", on: source)
+            setValueIfChanged(task.createdAt, forKey: "createdAt", on: source)
+        }
+        beforeSave()
+        try saveContext()
     }
 
-    private func insertTask(_ task: TodoTask) {
-        let object = NSEntityDescription.insertNewObject(forEntityName: Entity.task, into: context)
-        object.setValue(task.id, forKey: "localID")
-        object.setValue(task.title, forKey: "title")
-        object.setValue(task.detail, forKey: "detail")
-        object.setValue(task.priority.rawValue, forKey: "priority")
-        object.setValue(task.status.rawValue, forKey: "status")
-        object.setValue(task.dueAt, forKey: "dueAt")
-        object.setValue(task.sourceQuote, forKey: "sourceQuote")
-        object.setValue(task.createdAt, forKey: "createdAt")
-        object.setValue(task.updatedAt, forKey: "updatedAt")
-        object.setValue(task.deletedAt, forKey: "deletedAt")
+    private func updateTask(_ task: TodoTask, on object: NSManagedObject) {
+        setValueIfChanged(task.id, forKey: "localID", on: object)
+        setValueIfChanged(task.title, forKey: "title", on: object)
+        setValueIfChanged(task.detail, forKey: "detail", on: object)
+        setValueIfChanged(task.priority.rawValue, forKey: "priority", on: object)
+        setValueIfChanged(task.status.rawValue, forKey: "status", on: object)
+        setValueIfChanged(task.dueAt, forKey: "dueAt", on: object)
+        setValueIfChanged(task.sourceQuote, forKey: "sourceQuote", on: object)
+        setValueIfChanged(task.createdAt, forKey: "createdAt", on: object)
+        setValueIfChanged(task.updatedAt, forKey: "updatedAt", on: object)
+        setValueIfChanged(task.deletedAt, forKey: "deletedAt", on: object)
     }
 
-    private func insertTaskSource(for task: TodoTask) {
-        let object = NSEntityDescription.insertNewObject(forEntityName: Entity.taskSource, into: context)
-        object.setValue(UUID(), forKey: "localID")
-        object.setValue(task.id, forKey: "taskLocalID")
-        object.setValue(task.source.rawValue, forKey: "sourceType")
-        object.setValue(task.sourceKey, forKey: "sourceHash")
-        object.setValue(task.sourceQuote, forKey: "sourceQuote")
-        object.setValue(nil, forKey: "ocrTextRef")
-        object.setValue(task.createdAt, forKey: "createdAt")
+    private func setValueIfChanged(_ value: Any?, forKey key: String, on object: NSManagedObject) {
+        let current = object.value(forKey: key)
+        if current == nil, value == nil { return }
+        if let current = current as? NSObject, let value = value as? NSObject,
+           current.isEqual(value) { return }
+        object.setValue(value, forKey: key)
     }
 
-    private func fetchTaskSourcesByTaskID() -> [UUID: TaskSourceSnapshot] {
+    private func fetchTaskSourcesByTaskID() throws -> [UUID: TaskSourceSnapshot] {
         let request = NSFetchRequest<NSManagedObject>(entityName: Entity.taskSource)
-        let records = (try? context.fetch(request)) ?? []
+        let records = try fetchRecords(request)
         var result: [UUID: TaskSourceSnapshot] = [:]
         for record in records {
             guard let taskID = record.value(forKey: "taskLocalID") as? UUID else {
@@ -359,31 +459,46 @@ final class CoreDataLocalStore: TaskStorePersistence, CaptureSessionRecording, A
     }
 
     private func updateCaptureSession(_ id: UUID, mutate: (NSManagedObject) -> Void) {
-        let request = NSFetchRequest<NSManagedObject>(entityName: Entity.captureSession)
-        request.fetchLimit = 1
-        request.predicate = NSPredicate(format: "localID == %@", id as CVarArg)
-        guard let object = try? context.fetch(request).first else {
-            return
-        }
-        mutate(object)
-        saveContext()
-    }
-
-    private func deleteAll(_ entityName: String) {
-        let request = NSFetchRequest<NSManagedObject>(entityName: entityName)
-        guard let objects = try? context.fetch(request) else {
-            return
-        }
-        for object in objects {
-            context.delete(object)
+        performStorageTransaction {
+            let request = NSFetchRequest<NSManagedObject>(entityName: Entity.captureSession)
+            request.fetchLimit = 1
+            request.predicate = NSPredicate(format: "localID == %@", id as CVarArg)
+            if let object = try fetchRecords(request).first {
+                mutate(object)
+            }
         }
     }
 
-    private func saveContext() {
-        guard context.hasChanges else {
-            return
+    private func fetchRecords(_ request: NSFetchRequest<NSManagedObject>) throws -> [NSManagedObject] {
+        try persistenceFaultInjector?(.fetch(request.entityName ?? ""))
+        return try context.fetch(request)
+    }
+
+    private func performStorageTransaction(_ mutate: () throws -> Void) {
+        autoreleasepool {
+            guard persistentStoreLoaded else { return }
+            do {
+                try mutate()
+                try saveContext()
+            } catch {
+                // 共用 context 的任一事务失败都立即回滚，避免下次保存夹带未提交记录。
+                context.rollback()
+                Self.logStorageError(error)
+            }
         }
-        try? context.save()
+    }
+
+    private func saveContext() throws {
+        guard context.hasChanges else { return }
+        try persistenceFaultInjector?(.save)
+        try context.save()
+    }
+
+    private static func logStorageError(_ error: Error) {
+        let error = error as NSError
+        let allowedDomains = [NSCocoaErrorDomain, NSOSStatusErrorDomain, NSPOSIXErrorDomain, NSMachErrorDomain]
+        let domain = allowedDomains.contains(error.domain) ? error.domain : "other"
+        performanceLogger.error("storage.failure domain=\(domain, privacy: .public) code=\(error.code, privacy: .public)")
     }
 
     private func markLegacyMigrated() {

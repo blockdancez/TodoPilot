@@ -823,10 +823,51 @@ private enum ConservativeReminderContext {
     }
 }
 
+// 生命周期由窗口控制器拥有，关闭时同步撤销，不能依赖 SwiftUI 延后的 onDisappear。
 @MainActor
-private final class FlightReminderPanelController {
+final class FlightReminderPresentationLifecycle {
+    private(set) var isCancelled = false
+    private var timer: Timer?
+    private var startedAtUptime: TimeInterval?
+
+    var hasScheduledTimer: Bool { timer?.isValid == true }
+
+    @discardableResult
+    func begin(at uptime: TimeInterval) -> Bool {
+        guard !isCancelled else { return false }
+        timer?.invalidate()
+        timer = nil
+        startedAtUptime = uptime
+        return true
+    }
+
+    func register(_ timer: Timer) {
+        guard !isCancelled, startedAtUptime != nil else {
+            timer.invalidate()
+            return
+        }
+        self.timer?.invalidate()
+        self.timer = timer
+    }
+
+    func elapsed(at uptime: TimeInterval, visualLead: TimeInterval) -> TimeInterval {
+        guard let startedAtUptime else { return 0 }
+        return max(0, uptime - startedAtUptime) + visualLead
+    }
+
+    func cancel() {
+        isCancelled = true
+        timer?.invalidate()
+        timer = nil
+    }
+}
+
+@MainActor
+final class FlightReminderPanelController {
     private let logger: PrivacyLogger?
-    private var panel: NSPanel?
+    private(set) var panel: NSPanel?
+    private var activePresentationID: UUID?
+    private(set) var activeLifecycle: FlightReminderPresentationLifecycle?
 
     init(logger: PrivacyLogger?) {
         self.logger = logger
@@ -840,6 +881,10 @@ private final class FlightReminderPanelController {
     ) {
         let startedAt = Date()
         dismiss()
+        let presentationID = UUID()
+        activePresentationID = presentationID
+        let lifecycle = FlightReminderPresentationLifecycle()
+        activeLifecycle = lifecycle
 
         let screen = NSScreen.main ?? NSScreen.screens.first
         let screenFrame = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1280, height: 800)
@@ -862,6 +907,9 @@ private final class FlightReminderPanelController {
             backing: .buffered,
             defer: false
         )
+        panel.isReleasedWhenClosed = false
+        // 飞行路径由内容动画控制，透明承载窗口不额外执行系统窗口变换。
+        panel.animationBehavior = .none
         panel.isOpaque = false
         panel.backgroundColor = .clear
         panel.level = .statusBar
@@ -874,8 +922,11 @@ private final class FlightReminderPanelController {
             logger: logger,
             playSound: playSound,
             bannerStyle: bannerStyle,
+            lifecycle: lifecycle,
             onProgress: { _ in },
             onDismiss: { [weak self] in
+                // 旧提醒的延后回调不能关闭刚创建的新提醒。
+                guard self?.activePresentationID == presentationID else { return }
                 self?.dismiss()
             }
         ).frame(width: panelSize.width, height: panelSize.height))
@@ -894,8 +945,25 @@ private final class FlightReminderPanelController {
     }
 
     func dismiss() {
-        panel?.orderOut(nil)
-        panel = nil
+        activeLifecycle?.cancel()
+        activeLifecycle = nil
+        guard let panel else { return }
+        // 先解除控制器引用，防止 SwiftUI 的卸载回调重入时操作同一窗口。
+        self.panel = nil
+        activePresentationID = nil
+        // orderOut 只隐藏窗口；显式卸载可取消飞行计时器，并拆除合成动画与观察者。
+        panel.contentView = nil
+        panel.orderOut(nil)
+        panel.close()
+        // 空闲时 NSApplication 可能仍在同一轮等待事件，框架外层 Cocoa 池暂留已关闭窗口。
+        // 只唤醒本应用进入下一事件边界排空该池，不激活窗口，也不产生键盘或鼠标输入。
+        if let event = NSEvent.otherEvent(
+            with: .applicationDefined, location: .zero, modifierFlags: [],
+            timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: 0,
+            context: nil, subtype: 0, data1: 0, data2: 0
+        ) {
+            NSApp.postEvent(event, atStart: false)
+        }
     }
 }
 
@@ -914,6 +982,7 @@ private struct FlightReminderView: View {
     let logger: PrivacyLogger?
     let playSound: Bool
     let bannerStyle: FlightReminderBannerStyle
+    let lifecycle: FlightReminderPresentationLifecycle
     let onProgress: (Double) -> Void
     let onDismiss: () -> Void
 
@@ -923,7 +992,6 @@ private struct FlightReminderView: View {
     @State private var elapsed: TimeInterval = 0
     @State private var isHovering = false
     @State private var didPlayCenterCue = false
-    @State private var timer: Timer?
 
     private let flightDuration = FlightReminderTiming.flightDuration
     private let autoDismissDelay = FlightReminderTiming.autoDismissDelay
@@ -974,10 +1042,7 @@ private struct FlightReminderView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         .onAppear(perform: startTimer)
-        .onDisappear {
-            timer?.invalidate()
-            timer = nil
-        }
+        .onDisappear { lifecycle.cancel() }
         .onHover { hovering in
             isHovering = hovering
         }
@@ -1071,7 +1136,8 @@ private struct FlightReminderView: View {
     }
 
     private func startTimer() {
-        timer?.invalidate()
+        // 重载下 onAppear 可能晚于面板关闭，已撤销的展示不能再次注册计时器或播放声音。
+        guard lifecycle.begin(at: ProcessInfo.processInfo.systemUptime) else { return }
         didPlayCenterCue = false
         elapsed = reduceMotion ? 0 : flightDuration * initialVisualProgress
         progress = reduceMotion ? 1 : initialVisualProgress
@@ -1089,9 +1155,15 @@ private struct FlightReminderView: View {
             }
         }
 
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { timer in
+        let timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { timer in
             Task { @MainActor in
-                elapsed += 1.0 / 60.0
+                // 窗口卸载后，已排入主队列的旧 tick 也必须停止，避免触发过期的自动关闭。
+                guard !lifecycle.isCancelled, timer.isValid else { return }
+                // 按单调时钟计算真实经过时长，掉帧不能延长提醒寿命或拖慢飞行。
+                elapsed = lifecycle.elapsed(
+                    at: ProcessInfo.processInfo.systemUptime,
+                    visualLead: reduceMotion ? 0 : flightDuration * initialVisualProgress
+                )
                 progress = reduceMotion ? 1 : min(elapsed / flightDuration, 1.0)
                 onProgress(progress)
                 if playSound, !didPlayCenterCue, progress >= centerHoldStart {
@@ -1106,6 +1178,7 @@ private struct FlightReminderView: View {
                 }
             }
         }
+        lifecycle.register(timer)
     }
 }
 
@@ -1809,27 +1882,40 @@ private struct PixelPlaneFallbackMark: View {
             .frame(width: drawingWidth, height: drawingHeight)
             .position(x: geometry.size.width / 2, y: geometry.size.height / 2)
         }
-        .drawingGroup(opaque: false, colorMode: .linear)
     }
 }
 
 private struct PixelPropellerMark: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let unit: CGFloat
     let animated: Bool
 
     var body: some View {
-        if animated {
-            TimelineView(.animation(minimumInterval: 0.10)) { timeline in
-                let frame = Int(timeline.date.timeIntervalSinceReferenceDate * 10) % 2
-                propellerFrame(frame)
-            }
+        let policy = PixelPropellerAnimationPolicy.pixelMark
+        if policy.shouldAnimate(requested: animated, reduceMotion: reduceMotion) {
+            PixelPropellerCompositorView(
+                configuration: PixelPropellerFrameConfiguration(
+                    size: CGSize(width: 18 * unit, height: 30 * unit),
+                    bladeLong: 0,
+                    bladeShort: 0,
+                    horizontalLong: 0,
+                    horizontalShort: 0,
+                    pixelUnit: unit
+                ),
+                policy: policy
+            )
+            .frame(width: 18 * unit, height: 30 * unit)
         } else {
-            propellerFrame(0)
+            PixelPropellerMarkFrame(frame: 0, unit: unit)
         }
     }
+}
 
-    @ViewBuilder
-    private func propellerFrame(_ frame: Int) -> some View {
+private struct PixelPropellerMarkFrame: View {
+    let frame: Int
+    let unit: CGFloat
+
+    var body: some View {
         ZStack(alignment: .topLeading) {
             PixelBlock(x: 0, y: 12, width: 4, height: 6, color: .black, unit: unit)
             PixelBlock(x: 2, y: 14, width: 3, height: 2, color: Color(red: 0.98, green: 0.98, blue: 0.95), unit: unit)
@@ -1974,6 +2060,12 @@ struct PixelPropellerAnimationPolicy: Equatable {
         renderingMode: .coreAnimationKeyframes
     )
 
+    static let pixelMark = PixelPropellerAnimationPolicy(
+        frameRate: 10,
+        frameCount: 2,
+        renderingMode: .coreAnimationKeyframes
+    )
+
     let frameRate: Double
     let frameCount: Int
     let renderingMode: PixelPropellerAnimationRenderingMode
@@ -2019,12 +2111,13 @@ private struct PixelPropellerSpinner: View {
     }
 }
 
-private struct PixelPropellerFrameConfiguration: Equatable {
+struct PixelPropellerFrameConfiguration: Equatable {
     let size: CGSize
     let bladeLong: CGFloat
     let bladeShort: CGFloat
     let horizontalLong: CGFloat
     let horizontalShort: CGFloat
+    var pixelUnit: CGFloat? = nil
 }
 
 private struct PixelPropellerFrameView: View {
@@ -2032,6 +2125,14 @@ private struct PixelPropellerFrameView: View {
     let configuration: PixelPropellerFrameConfiguration
 
     var body: some View {
+        if let unit = configuration.pixelUnit {
+            PixelPropellerMarkFrame(frame: frame, unit: unit)
+        } else {
+            spinnerFrame
+        }
+    }
+
+    private var spinnerFrame: some View {
         ZStack {
             Capsule()
                 .fill(Color.black.opacity(0.86))
@@ -2089,11 +2190,19 @@ private struct PixelPropellerCompositorView: NSViewRepresentable {
     }
 }
 
+// 只在外观改变时生成少量像素帧，循环交给合成器，避免每帧重算整个 SwiftUI 灵动岛。
 @MainActor
-private final class PixelPropellerAnimationView: NSView {
-    private static let animationKey = "TodoPilot.PixelPropeller.frames"
+final class PixelPropellerAnimationView: NSView {
+    static let animationKey = "TodoPilot.PixelPropeller.frames"
     private var renderedConfiguration: PixelPropellerFrameConfiguration?
     private var renderedPolicy: PixelPropellerAnimationPolicy?
+    private var renderedScale: CGFloat?
+    private var renderedFrames: [CGImage] = []
+    private var visibilityObservation: NSKeyValueObservation?
+    private var observerTokens: [NSObjectProtocol] = []
+    private(set) var frameRenderCount = 0
+
+    var animationObserverCount: Int { observerTokens.count + (visibilityObservation == nil ? 0 : 1) }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -2106,51 +2215,102 @@ private final class PixelPropellerAnimationView: NSView {
         nil
     }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        guard window != nil, let renderedConfiguration, let renderedPolicy else {
-            return
-        }
-        self.renderedConfiguration = nil
-        self.renderedPolicy = nil
-        update(configuration: renderedConfiguration, policy: renderedPolicy)
+    deinit {
+        visibilityObservation?.invalidate()
+        observerTokens.forEach(NotificationCenter.default.removeObserver)
     }
 
-    func update(
-        configuration: PixelPropellerFrameConfiguration,
-        policy: PixelPropellerAnimationPolicy
-    ) {
-        guard renderedConfiguration != configuration || renderedPolicy != policy else {
-            return
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        stopAnimating()
+        visibilityObservation?.invalidate()
+        visibilityObservation = nil
+        observerTokens.forEach(NotificationCenter.default.removeObserver)
+        observerTokens.removeAll()
+        if let window {
+            // 单靠遮挡通知无法覆盖 orderOut；直接监听窗口显示状态，且不使用定时轮询。
+            visibilityObservation = window.observe(\.isVisible, options: [.initial, .new]) { [weak self] _, _ in
+                DispatchQueue.main.async { self?.updateAnimationVisibility() }
+            }
+            for name in [NSWindow.didChangeOcclusionStateNotification,
+                         NSWindow.didMiniaturizeNotification,
+                         NSWindow.didDeminiaturizeNotification,
+                         NSWindow.didChangeBackingPropertiesNotification] {
+                observe(name, object: window)
+            }
+            observe(NSApplication.didHideNotification, object: NSApp)
+            observe(NSApplication.didUnhideNotification, object: NSApp)
         }
-
-        renderedConfiguration = configuration
-        renderedPolicy = policy
-        let frames = (0..<policy.frameCount).compactMap { frame in
-            let renderer = ImageRenderer(content:
-                PixelPropellerFrameView(frame: frame, configuration: configuration)
-                    .frame(width: configuration.size.width, height: configuration.size.height)
-            )
-            renderer.scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-            return renderer.cgImage
+        if window != nil, let renderedConfiguration, let renderedPolicy {
+            update(configuration: renderedConfiguration, policy: renderedPolicy)
         }
+    }
 
-        guard let firstFrame = frames.first, frames.count == policy.frameCount else {
+    override func viewDidHide() {
+        super.viewDidHide()
+        updateAnimationVisibility()
+    }
+
+    override func viewDidUnhide() {
+        super.viewDidUnhide()
+        updateAnimationVisibility()
+    }
+
+    private func observe(_ name: Notification.Name, object: AnyObject) {
+        observerTokens.append(NotificationCenter.default.addObserver(
+            forName: name, object: object, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, let configuration = self.renderedConfiguration,
+                      let policy = self.renderedPolicy else { return }
+                self.update(configuration: configuration, policy: policy)
+            }
+        })
+    }
+
+    func update(configuration: PixelPropellerFrameConfiguration, policy: PixelPropellerAnimationPolicy) {
+        let scale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
+        if renderedConfiguration != configuration || renderedPolicy != policy || renderedScale != scale {
+            renderedConfiguration = configuration
+            renderedPolicy = policy
+            renderedScale = scale
+            renderedFrames = (0..<policy.frameCount).compactMap { frame in
+                let renderer = ImageRenderer(content:
+                    PixelPropellerFrameView(frame: frame, configuration: configuration)
+                        .frame(width: configuration.size.width, height: configuration.size.height)
+                )
+                renderer.scale = scale
+                return renderer.cgImage
+            }
+            frameRenderCount += 1
+            stopAnimating()
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            layer?.contentsScale = scale
+            layer?.contents = renderedFrames.first
+            CATransaction.commit()
+        }
+        updateAnimationVisibility()
+    }
+
+    private func updateAnimationVisibility() {
+        // orderOut 后视图仍有 window，必须同时检查实际可见性，遮挡/隐藏时撤销循环动画。
+        guard let window, window.isVisible, !window.isMiniaturized,
+              window.occlusionState.contains(.visible), !isHiddenOrHasHiddenAncestor,
+              !NSApp.isHidden, let policy = renderedPolicy,
+              renderedFrames.count == policy.frameCount else {
             stopAnimating()
             return
         }
-
-        layer?.contentsScale = window?.backingScaleFactor ?? NSScreen.main?.backingScaleFactor ?? 2
-        layer?.contents = firstFrame
+        guard layer?.animation(forKey: Self.animationKey) == nil else { return }
         let animation = CAKeyframeAnimation(keyPath: "contents")
-        animation.values = frames
-        animation.keyTimes = (0..<frames.count).map {
-            NSNumber(value: Double($0) / Double(frames.count))
+        animation.values = renderedFrames
+        animation.keyTimes = (0..<renderedFrames.count).map {
+            NSNumber(value: Double($0) / Double(renderedFrames.count))
         }
-        animation.duration = Double(frames.count) / policy.frameRate
+        animation.duration = Double(renderedFrames.count) / policy.frameRate
         animation.calculationMode = .discrete
         animation.repeatCount = .infinity
-        animation.isRemovedOnCompletion = false
         layer?.add(animation, forKey: Self.animationKey)
     }
 

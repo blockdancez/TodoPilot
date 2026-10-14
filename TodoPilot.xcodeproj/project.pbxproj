@@ -35,6 +35,7 @@
 		4C2BC1C0D06038D23938CB4F /* AppEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F13D08B81467DD021FB8C2B /* AppEnvironment.swift */; };
 		4E4553644E1902F9949D7BAC /* LocalSettingsStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F677AEF622935C21F09A17DF /* LocalSettingsStoreTests.swift */; };
 		502A36C79440E52A6D854762 /* CaptureService.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA4D2A1966B3CC763E4D9A9D /* CaptureService.swift */; };
+		571B43DD44042E152D304DF5 /* WindowRefreshVisibilityReader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 23FACD9A0EB83B7EF0151EE0 /* WindowRefreshVisibilityReader.swift */; };
 		5AFDD6B67120955AAEE7F775 /* PrivacyLogger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 662F3A9AFDD51CCF76A58173 /* PrivacyLogger.swift */; };
 		617EF6D8CFA436B7200F8D1A /* AgentHookRuntimePath.swift in Sources */ = {isa = PBXBuildFile; fileRef = C755B5D126D244AE1C620A98 /* AgentHookRuntimePath.swift */; };
 		64892D152A8B65C6C471AA32 /* TaskStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 269511417D9BA6C456D687D4 /* TaskStoreTests.swift */; };
@@ -58,6 +59,7 @@
 		AAB07F7FC18A59DD47974B4D /* AgentBridgeServerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 84C7F14C88835E8AE33E5890 /* AgentBridgeServerTests.swift */; };
 		B470D10CE7775632576A6D3D /* AsyncTimeoutTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 126070CEB1419833DC40F9B1 /* AsyncTimeoutTests.swift */; };
 		B6598A0CB3DA9E52759ED6B0 /* TodoPilotCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4A23CE8796A9D051E79B375B /* TodoPilotCommands.swift */; };
+		BB0AFD26DC9DA67068C6C39D /* WindowRefreshVisibilityTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6595A85E1F1C35FC2041EF64 /* WindowRefreshVisibilityTests.swift */; };
 		BF69BA923299D417E501DA59 /* StatusIslandWindowController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8909B274CE5E5768548F3D51 /* StatusIslandWindowController.swift */; };
 		C279720763BB1859850E858F /* AgentHookAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4F4FC67A30139BCBF896B5C4 /* AgentHookAdapter.swift */; };
 		C4CC9B56F20DCDC0E6EF2F24 /* TodoPilotModalComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E518BCDFECA428CAE36B92DE /* TodoPilotModalComponents.swift */; };
@@ -120,6 +122,7 @@
 		1DEFB1BE7B36609E545C3D9B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
 		1FEC236DAEC40F3FA43C87FF /* OCRService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OCRService.swift; sourceTree = "<group>"; };
 		229F1B82DA10A53131EF3243 /* ReminderSchedulerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderSchedulerTests.swift; sourceTree = "<group>"; };
+		23FACD9A0EB83B7EF0151EE0 /* WindowRefreshVisibilityReader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRefreshVisibilityReader.swift; sourceTree = "<group>"; };
 		269511417D9BA6C456D687D4 /* TaskStoreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TaskStoreTests.swift; sourceTree = "<group>"; };
 		2A20B135CC93551F35553F2F /* RootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RootView.swift; sourceTree = "<group>"; };
 		2ED45D8520B46FB329CC301A /* AgentProviderDetector.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentProviderDetector.swift; sourceTree = "<group>"; };
@@ -136,6 +139,7 @@
 		4F4FC67A30139BCBF896B5C4 /* AgentHookAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentHookAdapter.swift; sourceTree = "<group>"; };
 		574249AF449535529D1F9725 /* AgentRun.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRun.swift; sourceTree = "<group>"; };
 		5BBF9474092AA3E8AD031CE9 /* TodoPilotApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TodoPilotApp.swift; sourceTree = "<group>"; };
+		6595A85E1F1C35FC2041EF64 /* WindowRefreshVisibilityTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WindowRefreshVisibilityTests.swift; sourceTree = "<group>"; };
 		662F3A9AFDD51CCF76A58173 /* PrivacyLogger.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PrivacyLogger.swift; sourceTree = "<group>"; };
 		68FF14727B42EC7D7A983F46 /* AgentRunStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AgentRunStore.swift; sourceTree = "<group>"; };
 		6B5FB3B3585540093FC900CD /* TodoPilotTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = TodoPilotTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -215,6 +219,7 @@
 				DB1F62B4375CB0941471F38C /* TaskDataExporterTests.swift */,
 				3F4F5F0C0C329E6D3159462A /* TaskSourceTabLayoutPolicyTests.swift */,
 				269511417D9BA6C456D687D4 /* TaskStoreTests.swift */,
+				6595A85E1F1C35FC2041EF64 /* WindowRefreshVisibilityTests.swift */,
 			);
 			path = TodoPilotTests;
 			sourceTree = "<group>";
@@ -499,6 +504,7 @@
 			isa = PBXGroup;
 			children = (
 				148FB2ACA64FD4A255C8251C /* ShortcutKeyChordView.swift */,
+				23FACD9A0EB83B7EF0151EE0 /* WindowRefreshVisibilityReader.swift */,
 			);
 			path = UI;
 			sourceTree = "<group>";
@@ -724,6 +730,7 @@
 				C4CC9B56F20DCDC0E6EF2F24 /* TodoPilotModalComponents.swift in Sources */,
 				02AC3DDF8D2B7B338A55CE0E /* TodoTask.swift in Sources */,
 				C90B9A1C353D712C8E636F29 /* VisionTextRequestPerformer.m in Sources */,
+				571B43DD44042E152D304DF5 /* WindowRefreshVisibilityReader.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -752,6 +759,7 @@
 				11E67AC278F4715D2DC2562C /* TaskSourceTabLayoutPolicyTests.swift in Sources */,
 				64892D152A8B65C6C471AA32 /* TaskStoreTests.swift in Sources */,
 				8206F35660BCA8CDBE12E66D /* UnixDomainSocketClient.swift in Sources */,
+				BB0AFD26DC9DA67068C6C39D /* WindowRefreshVisibilityTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -882,6 +890,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_HARDENED_RUNTIME = YES;
@@ -1015,6 +1024,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = NO;
+				CODE_SIGNING_ALLOWED = YES;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 4;
 				ENABLE_HARDENED_RUNTIME = YES;

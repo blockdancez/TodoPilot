@@ -1,7 +1,18 @@
 import AppKit
+import Darwin
 import SwiftUI
 
 @main
+enum TodoPilotMain {
+    @MainActor
+    static func main() {
+        guard TodoPilotApplicationInstanceCoordinator.shouldLaunchPrimaryInstance() else {
+            return
+        }
+        TodoPilotApp.main()
+    }
+}
+
 struct TodoPilotApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @StateObject private var environment: AppEnvironment
@@ -54,6 +65,156 @@ struct TodoPilotApp: App {
                 .environmentObject(environment.settingsStore)
                 .frame(width: 980, height: 660)
         }
+    }
+}
+
+final class TodoPilotSingleInstanceLock {
+    enum Acquisition: Equatable {
+        case acquired
+        case alreadyHeld
+        case unavailable
+    }
+
+    static let shared = TodoPilotSingleInstanceLock()
+
+    private let lockURL: URL
+    private let fileManager: FileManager
+    private let stateLock = NSLock()
+    private var descriptor: Int32 = -1
+
+    init(
+        lockURL: URL? = nil,
+        fileManager: FileManager = .default
+    ) {
+        self.fileManager = fileManager
+        self.lockURL = lockURL ?? fileManager
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("TodoPilot", isDirectory: true)
+            .appendingPathComponent("Runtime", isDirectory: true)
+            .appendingPathComponent("instance.lock", isDirectory: false)
+    }
+
+    deinit {
+        release()
+    }
+
+    func acquire() -> Acquisition {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        guard descriptor < 0 else {
+            return .acquired
+        }
+
+        let directoryURL = lockURL.deletingLastPathComponent()
+        do {
+            try fileManager.createDirectory(
+                at: directoryURL,
+                withIntermediateDirectories: true
+            )
+        } catch {
+            return .unavailable
+        }
+
+        _ = Darwin.chmod(directoryURL.path, S_IRWXU)
+        let fileDescriptor = Darwin.open(
+            lockURL.path,
+            O_CREAT | O_RDWR | O_EXLOCK | O_NONBLOCK,
+            S_IRUSR | S_IWUSR
+        )
+        guard fileDescriptor >= 0 else {
+            let lockError = errno
+            return lockError == EWOULDBLOCK || lockError == EAGAIN
+                ? .alreadyHeld
+                : .unavailable
+        }
+        _ = Darwin.fchmod(fileDescriptor, S_IRUSR | S_IWUSR)
+
+        descriptor = fileDescriptor
+        return .acquired
+    }
+
+    func release() {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+
+        guard descriptor >= 0 else {
+            return
+        }
+        Darwin.close(descriptor)
+        descriptor = -1
+    }
+}
+
+@MainActor
+enum TodoPilotApplicationInstanceCoordinator {
+    static func shouldLaunchPrimaryInstance(
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        lock: TodoPilotSingleInstanceLock = .shared
+    ) -> Bool {
+        if environment["XCTestConfigurationFilePath"] != nil {
+            return true
+        }
+
+        if let olderInstance = olderRunningInstance() {
+            olderInstance.activate(options: [.activateAllWindows])
+            return false
+        }
+
+        switch lock.acquire() {
+        case .acquired:
+            return true
+        case .alreadyHeld:
+            runningInstance()?.activate(options: [.activateAllWindows])
+            return false
+        case .unavailable:
+            guard let runningInstance = runningInstance() else {
+                return true
+            }
+            runningInstance.activate(options: [.activateAllWindows])
+            return false
+        }
+    }
+
+    private static func olderRunningInstance() -> NSRunningApplication? {
+        let current = NSRunningApplication.current
+        let currentLaunchDate = current.launchDate ?? .distantPast
+        return matchingRunningInstances()
+            .filter { application in
+                let launchDate = application.launchDate ?? .distantPast
+                if launchDate != currentLaunchDate {
+                    return launchDate < currentLaunchDate
+                }
+                return application.processIdentifier < current.processIdentifier
+            }
+            .min(by: launchesBefore)
+    }
+
+    private static func runningInstance() -> NSRunningApplication? {
+        matchingRunningInstances().min(by: launchesBefore)
+    }
+
+    private static func matchingRunningInstances() -> [NSRunningApplication] {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            return []
+        }
+        let currentProcessIdentifier = ProcessInfo.processInfo.processIdentifier
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .filter {
+                !$0.isTerminated && $0.processIdentifier != currentProcessIdentifier
+            }
+    }
+
+    private static func launchesBefore(
+        _ lhs: NSRunningApplication,
+        _ rhs: NSRunningApplication
+    ) -> Bool {
+        let lhsDate = lhs.launchDate ?? .distantPast
+        let rhsDate = rhs.launchDate ?? .distantPast
+        if lhsDate != rhsDate {
+            return lhsDate < rhsDate
+        }
+        return lhs.processIdentifier < rhs.processIdentifier
     }
 }
 private struct TodoPilotMenuBarCommands: View {

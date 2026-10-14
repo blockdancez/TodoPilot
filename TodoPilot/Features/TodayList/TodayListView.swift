@@ -43,6 +43,7 @@ struct TodayListView: View {
     @State private var pendingTaskIDs: Set<TodoTask.ID> = []
     @State private var sortMode: DefaultTodaySortMode = .priority
     @State private var currentDate = Date()
+    @State private var isWindowVisible = false
 
     private let deadlineClock = Timer.publish(every: 15, on: .main, in: .common).autoconnect()
     private let calendarRefreshClock = Timer.publish(every: 10 * 60, on: .main, in: .common).autoconnect()
@@ -76,6 +77,10 @@ struct TodayListView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(WindowRefreshVisibilityReader { visible in
+            isWindowVisible = visible
+            if visible { currentDate = Date() }
+        }.frame(width: 0, height: 0))
         .onReceive(NotificationCenter.default.publisher(for: .applicationTerminationRequested)) { _ in
             taskSheet = nil
         }
@@ -139,8 +144,9 @@ struct TodayListView: View {
             }
         }
         .onReceive(deadlineClock) { date in
+            // 后台任务状态检查继续运行，只暂停不可见界面的重绘。
             taskStore.autoCompleteExpiredTasks(asOf: date)
-            currentDate = date
+            if isWindowVisible { currentDate = date }
         }
         .onReceive(calendarRefreshClock) { date in
             Task {

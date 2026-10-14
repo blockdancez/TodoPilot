@@ -1,5 +1,6 @@
 import Combine
 import CoreGraphics
+import CoreData
 import XCTest
 @testable import TodoPilot
 
@@ -783,6 +784,332 @@ final class TaskStoreTests: XCTestCase {
         XCTAssertEqual(snapshot.runningAgentTasks, [newer])
         XCTAssertEqual(snapshot.orderedActiveTasks, [newer])
     }
+    func testCoreDataSQLiteSingleEditKeepsObjectIDsAndNoopDoesNotCommit() throws {
+        try withSQLiteStore { persistence, url in
+            let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+            var tasks = (0..<250).map { index in
+                TodoTask(title: "Synthetic \(index)", createdAt: stamp, updatedAt: stamp)
+            }
+            persistence.save(tasks)
+            let taskIDs = try storageObjectIDs(persistence, entity: "TaskRecord", key: "localID")
+            let sourceIDs = try storageObjectIDs(persistence, entity: "TaskSourceRecord", key: "taskLocalID")
+            let sourceLocalIDs = try storageRecords(persistence, entity: "TaskSourceRecord").map {
+                $0.value(forKey: "localID") as? UUID
+            }
+            let observer = PersistenceSaveRecorder(context: persistence.storageTestContext)
+
+            tasks[0].status = .done
+            tasks[0].updatedAt = stamp.addingTimeInterval(10)
+            persistence.save(tasks)
+
+            XCTAssertEqual(observer.commitCount, 1)
+            XCTAssertEqual(observer.insertedCount, 0)
+            XCTAssertEqual(observer.updatedCount, 1)
+            XCTAssertEqual(observer.deletedCount, 0)
+            XCTAssertEqual(try storageObjectIDs(persistence, entity: "TaskRecord", key: "localID"), taskIDs)
+            XCTAssertEqual(try storageObjectIDs(persistence, entity: "TaskSourceRecord", key: "taskLocalID"), sourceIDs)
+            XCTAssertEqual(try storageRecords(persistence, entity: "TaskSourceRecord").map {
+                $0.value(forKey: "localID") as? UUID
+            }, sourceLocalIDs)
+
+            observer.clear()
+            persistence.save(tasks)
+            XCTAssertEqual(observer.commitCount, 0)
+            XCTAssertFalse(persistence.storageTestContext.hasChanges)
+            let reopened = CoreDataLocalStore(storeURL: url, defaults: defaults, migratesLegacyUserDefaults: false)
+            XCTAssertEqual(Dictionary(uniqueKeysWithValues: reopened.load()!.map { ($0.id, $0) }), Dictionary(uniqueKeysWithValues: tasks.map { ($0.id, $0) }))
+            XCTAssertEqual(reopened.load()?.first { $0.id == tasks[0].id }, tasks[0])
+            XCTAssertEqual(try storageObjectIDs(reopened, entity: "TaskRecord", key: "localID").mapValues { $0.uriRepresentation() }, taskIDs.mapValues { $0.uriRepresentation() })
+        }
+    }
+
+    func testCoreDataSourceFieldsAndQuoteClearingDoNotDependOnUpdatedAt() throws {
+        try withSQLiteStore { persistence, url in
+            let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+            var task = TodoTask(title: "Synthetic source", detail: "Synthetic detail", dueAt: stamp,
+                                sourceQuote: "Synthetic quote", source: .localCalendar, sourceKey: "synthetic-key",
+                                createdAt: stamp, updatedAt: stamp)
+            persistence.save([task])
+            let source = try XCTUnwrap(storageRecords(persistence, entity: "TaskSourceRecord").first)
+            let sourceID = source.objectID
+            let localID = source.value(forKey: "localID") as? UUID
+            source.setValue("synthetic-reference", forKey: "ocrTextRef")
+            try persistence.storageTestContext.save()
+            let observer = PersistenceSaveRecorder(context: persistence.storageTestContext)
+
+            task.source = .codeAgent
+            task.sourceKey = "synthetic-new-key"
+            task.sourceQuote = "Synthetic updated quote"
+            task.createdAt = stamp.addingTimeInterval(-10)
+            task.detail = nil
+            task.priority = .high
+            task.dueAt = nil
+            persistence.save([task])
+
+            XCTAssertEqual(observer.updatedCount, 2)
+            XCTAssertEqual(persistence.load(), [task])
+            XCTAssertEqual(source.objectID, sourceID)
+            XCTAssertEqual(source.value(forKey: "localID") as? UUID, localID)
+            XCTAssertEqual(source.value(forKey: "sourceType") as? String, task.source.rawValue)
+            XCTAssertEqual(source.value(forKey: "sourceHash") as? String, task.sourceKey)
+            XCTAssertEqual(source.value(forKey: "createdAt") as? Date, task.createdAt)
+            XCTAssertNil(source.value(forKey: "ocrTextRef"))
+
+            task.sourceQuote = nil
+            task.sourceKey = nil
+            task.source = .manual
+            persistence.save([task])
+            XCTAssertNil(source.value(forKey: "sourceQuote"))
+            XCTAssertNil(try storageRecords(persistence, entity: "TaskRecord").first?.value(forKey: "sourceQuote"))
+            let reopened = CoreDataLocalStore(storeURL: url, defaults: defaults, migratesLegacyUserDefaults: false)
+            XCTAssertEqual(reopened.load(), [task])
+        }
+    }
+
+    func testCoreDataSoftDeleteRestoreDoneArchiveAndClearKeepSnapshotSemantics() throws {
+        try withSQLiteStore { persistence, url in
+            let task = TodoTask(title: "Synthetic lifecycle")
+            persistence.save([task])
+            let originalIDs = try storageObjectIDs(persistence, entity: "TaskRecord", key: "localID")
+            let originalSources = try storageObjectIDs(persistence, entity: "TaskSourceRecord", key: "taskLocalID")
+            let store = TaskStore(seed: [], persistence: persistence)
+            store.complete(task.id)
+            store.softDelete(task.id)
+            XCTAssertEqual(persistence.load()?.first?.status, .done)
+            XCTAssertNotNil(persistence.load()?.first?.deletedAt)
+            store.restoreDeleted(task.id)
+            XCTAssertEqual(persistence.load()?.first?.status, .done)
+            XCTAssertNil(persistence.load()?.first?.deletedAt)
+            var archived = try XCTUnwrap(persistence.load()?.first)
+            archived.status = .archived
+            persistence.save([archived])
+            XCTAssertEqual(try storageObjectIDs(persistence, entity: "TaskRecord", key: "localID"), originalIDs)
+            XCTAssertEqual(try storageObjectIDs(persistence, entity: "TaskSourceRecord", key: "taskLocalID"), originalSources)
+            XCTAssertEqual(CoreDataLocalStore(storeURL: url, defaults: defaults, migratesLegacyUserDefaults: false).load(), [archived])
+            store.clearAllData()
+            XCTAssertEqual(persistence.load(), [])
+            XCTAssertTrue(try storageRecords(persistence, entity: "TaskRecord").isEmpty)
+            XCTAssertTrue(try storageRecords(persistence, entity: "TaskSourceRecord").isEmpty)
+            XCTAssertEqual(CoreDataLocalStore(storeURL: url, defaults: defaults, migratesLegacyUserDefaults: false).load(), [])
+        }
+    }
+
+    func testCoreDataRepairsDuplicateMissingAndOrphanRecordsWithoutReplacingUnaffectedTasks() throws {
+        try withSQLiteStore { persistence, _ in
+            let a = TodoTask(title: "Synthetic duplicate", sourceQuote: "Synthetic quote")
+            let b = TodoTask(title: "Synthetic missing source")
+            let removed = TodoTask(title: "Synthetic removed")
+            let added = TodoTask(title: "Synthetic added")
+            persistence.save([a, b, removed])
+            let context = persistence.storageTestContext
+            let taskRecords = try storageRecords(persistence, entity: "TaskRecord")
+            let sourceRecords = try storageRecords(persistence, entity: "TaskSourceRecord")
+            let aRecord = try XCTUnwrap(taskRecords.first { $0.value(forKey: "localID") as? UUID == a.id })
+            let bRecord = try XCTUnwrap(taskRecords.first { $0.value(forKey: "localID") as? UUID == b.id })
+            let aSource = try XCTUnwrap(sourceRecords.first { $0.value(forKey: "taskLocalID") as? UUID == a.id })
+            let bSource = try XCTUnwrap(sourceRecords.first { $0.value(forKey: "taskLocalID") as? UUID == b.id })
+            let bID = bRecord.objectID
+            let duplicateTask = duplicateStorageRecord(aRecord, in: context)
+            duplicateTask.setValue("Synthetic stale duplicate", forKey: "title")
+            _ = duplicateStorageRecord(aSource, in: context)
+            context.delete(bSource)
+            let orphan = duplicateStorageRecord(aSource, in: context)
+            orphan.setValue(UUID(), forKey: "localID")
+            orphan.setValue(UUID(), forKey: "taskLocalID")
+            let addedOrphan = duplicateStorageRecord(aSource, in: context)
+            addedOrphan.setValue(UUID(), forKey: "localID")
+            addedOrphan.setValue(added.id, forKey: "taskLocalID")
+            try context.save()
+            let orphanID = addedOrphan.objectID
+
+            persistence.save([a, b, added])
+
+            XCTAssertEqual(Set(persistence.load()?.map(\.id) ?? []), Set([a.id, b.id, added.id]))
+            XCTAssertEqual(persistence.load()?.first { $0.id == a.id }, a)
+            XCTAssertEqual(try storageRecords(persistence, entity: "TaskRecord").count, 3)
+            let repairedSources = try storageRecords(persistence, entity: "TaskSourceRecord")
+            XCTAssertEqual(repairedSources.count, 3)
+            XCTAssertEqual(Set(repairedSources.compactMap { $0.value(forKey: "taskLocalID") as? UUID }), Set([a.id, b.id, added.id]))
+            XCTAssertEqual(try storageObjectIDs(persistence, entity: "TaskRecord", key: "localID")[b.id], bID)
+            XCTAssertFalse(repairedSources.contains { $0.objectID == orphanID })
+            XCTAssertFalse(context.hasChanges)
+        }
+    }
+
+    func testCoreDataFailedSaveRollsBackAndOnlySuccessfulSaveMarksFlags() throws {
+        try withSQLiteStore { persistence, url in
+            let initialized = "coreData.local.tasks.storeInitialized.v1"
+            let migrated = "coreData.local.tasks.legacyMigrationCompleted.v1"
+            let original = TodoTask(title: "Synthetic original", sourceQuote: "Synthetic original quote")
+            persistence.persistenceFaultInjector = { stage in
+                if stage == .save { throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError) }
+            }
+            persistence.save([original])
+            XCTAssertFalse(defaults.bool(forKey: initialized))
+            XCTAssertFalse(defaults.bool(forKey: migrated))
+            XCTAssertFalse(persistence.storageTestContext.hasChanges)
+            XCTAssertTrue(try storageRecords(persistence, entity: "TaskRecord").isEmpty)
+            persistence.persistenceFaultInjector = nil
+            persistence.save([original])
+            XCTAssertTrue(defaults.bool(forKey: initialized))
+            XCTAssertTrue(defaults.bool(forKey: migrated))
+
+            var changed = original
+            changed.title = "Synthetic uncommitted"
+            changed.sourceQuote = nil
+            let inserted = TodoTask(title: "Synthetic uncommitted insert")
+            persistence.persistenceFaultInjector = { stage in
+                if stage == .save { throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError) }
+            }
+            persistence.save([changed, inserted])
+            XCTAssertFalse(persistence.storageTestContext.hasChanges)
+            persistence.persistenceFaultInjector = nil
+            let run = AgentRun(provider: .codex, sessionIdentityHash: "synthetic-session", startedAt: Date(timeIntervalSince1970: 1_800_000_000), lastEventAt: Date(timeIntervalSince1970: 1_800_000_000))
+            persistence.saveAgentRun(run)
+            XCTAssertEqual(persistence.load(), [original])
+            XCTAssertEqual(CoreDataLocalStore(storeURL: url, defaults: defaults, migratesLegacyUserDefaults: false).load(), [original])
+            persistence.save([changed, inserted])
+            XCTAssertEqual(Set(persistence.load()?.map(\.id) ?? []), Set([changed.id, inserted.id]))
+            persistence.persistenceFaultInjector = { stage in
+                if stage == .save { throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError) }
+            }
+            persistence.save([])
+            XCTAssertFalse(persistence.storageTestContext.hasChanges)
+            persistence.persistenceFaultInjector = nil
+            XCTAssertEqual(persistence.load()?.count, 2)
+            persistence.save([])
+            XCTAssertEqual(persistence.load(), [])
+        }
+    }
+
+    func testCoreDataFetchFailureCannotOverwriteTasksUntilSuccessfulReload() throws {
+        try withSQLiteStore { persistence, url in
+            let original = TodoTask(title: "Synthetic protected")
+            persistence.save([original])
+            for entity in ["TaskRecord", "TaskSourceRecord"] {
+                persistence.persistenceFaultInjector = { stage in
+                    if stage == .fetch(entity) { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError) }
+                }
+                persistence.save([])
+                XCTAssertFalse(persistence.storageTestContext.hasChanges)
+                XCTAssertNil(persistence.load())
+                persistence.persistenceFaultInjector = nil
+                // 失败 load 后，即使 fetch 已恢复，也不能用调用方的空快照覆盖真实数据。
+                persistence.save([])
+                let run = AgentRun(provider: .cursor, sessionIdentityHash: "synthetic-independent", startedAt: Date(timeIntervalSince1970: 1_800_000_000), lastEventAt: Date(timeIntervalSince1970: 1_800_000_000))
+                persistence.saveAgentRun(run)
+                let capture = persistence.startCaptureSession(surface: "synthetic", screenCount: 1)
+                persistence.cancelCaptureSession(capture)
+                XCTAssertEqual(CoreDataLocalStore(storeURL: url, defaults: defaults, migratesLegacyUserDefaults: false).load(), [original])
+                XCTAssertEqual(persistence.load(), [original])
+            }
+            persistence.save([])
+            XCTAssertEqual(persistence.load(), [])
+        }
+    }
+
+    func testCoreDataFailedLegacyMigrationLeavesFlagsUnsetAndRetriesAfterReload() throws {
+        try withSQLiteStore { persistence, _ in
+            let task = TodoTask(title: "Synthetic legacy", createdAt: Date(timeIntervalSince1970: 1_800_000_000), updatedAt: Date(timeIntervalSince1970: 1_800_000_000))
+            let legacy = UserDefaultsTaskStorePersistence(defaults: defaults)
+            legacy.save([task])
+            let context = persistence.storageTestContext
+            let url = try XCTUnwrap(context.persistentStoreCoordinator?.persistentStores.first?.url)
+            let migrating = CoreDataLocalStore(storeURL: url, defaults: defaults, legacyPersistence: legacy)
+            migrating.persistenceFaultInjector = { stage in
+                if stage == .save { throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError) }
+            }
+            XCTAssertNil(migrating.load())
+            XCTAssertFalse(defaults.bool(forKey: "coreData.local.tasks.storeInitialized.v1"))
+            XCTAssertFalse(defaults.bool(forKey: "coreData.local.tasks.legacyMigrationCompleted.v1"))
+            XCTAssertFalse(migrating.storageTestContext.hasChanges)
+            migrating.persistenceFaultInjector = nil
+            migrating.save([])
+            XCTAssertTrue(try storageRecords(migrating, entity: "TaskRecord").isEmpty)
+            XCTAssertEqual(migrating.load(), [task])
+            XCTAssertTrue(defaults.bool(forKey: "coreData.local.tasks.storeInitialized.v1"))
+            XCTAssertTrue(defaults.bool(forKey: "coreData.local.tasks.legacyMigrationCompleted.v1"))
+        }
+    }
+
+    func testCoreDataAgentAndCaptureFailuresDoNotLeakIntoNextTransaction() throws {
+        try withSQLiteStore { persistence, _ in
+            let task = TodoTask(title: "Synthetic shared context")
+            persistence.save([task])
+            var run = AgentRun(provider: .codex, sessionIdentityHash: "synthetic-run", startedAt: Date(timeIntervalSince1970: 1_800_000_000), lastEventAt: Date(timeIntervalSince1970: 1_800_000_000))
+            persistence.saveAgentRun(run)
+            let capture = persistence.startCaptureSession(surface: "synthetic", screenCount: 1)
+            persistence.persistenceFaultInjector = { stage in
+                if stage == .save { throw NSError(domain: NSCocoaErrorDomain, code: NSFileWriteUnknownError) }
+            }
+            run.state = .terminal
+            persistence.saveAgentRun(run)
+            persistence.saveAgentRun(AgentRun(provider: .cursor, sessionIdentityHash: "synthetic-not-committed", startedAt: Date(timeIntervalSince1970: 1_800_000_000), lastEventAt: Date(timeIntervalSince1970: 1_800_000_000)))
+            persistence.deleteAgentRun(run.id)
+            let failedCapture = persistence.startCaptureSession(surface: "synthetic-failure", screenCount: 1)
+            persistence.completeCaptureSession(capture, displayID: 1, bounds: CGRect(x: 1, y: 2, width: 3, height: 4))
+            XCTAssertFalse(persistence.storageTestContext.hasChanges)
+            persistence.persistenceFaultInjector = nil
+            persistence.save([task])
+            XCTAssertEqual(persistence.loadAgentRuns().count, 1)
+            XCTAssertNotEqual(persistence.loadAgentRuns().first?.state, .terminal)
+            XCTAssertEqual(persistence.loadCaptureSessions().map(\.id), [capture])
+            XCTAssertFalse(persistence.loadCaptureSessions().contains { $0.id == failedCapture })
+            XCTAssertEqual(persistence.loadCaptureSessions().first?.status, "STARTED")
+
+            var fetches = 0
+            persistence.persistenceFaultInjector = { stage in
+                if stage == .fetch("AgentRunRecord") {
+                    fetches += 1
+                    if fetches == 2 { throw NSError(domain: NSCocoaErrorDomain, code: NSFileReadUnknownError) }
+                }
+            }
+            persistence.saveAgentRuns([run, AgentRun(provider: .cursor, sessionIdentityHash: "synthetic-batch", startedAt: Date(timeIntervalSince1970: 1_800_000_000), lastEventAt: Date(timeIntervalSince1970: 1_800_000_000))])
+            XCTAssertFalse(persistence.storageTestContext.hasChanges)
+            persistence.persistenceFaultInjector = nil
+            persistence.save([task])
+            XCTAssertEqual(persistence.loadAgentRuns().count, 1)
+            XCTAssertNotEqual(persistence.loadAgentRuns().first?.state, .terminal)
+            persistence.saveAgentRun(run)
+            persistence.completeCaptureSession(capture, displayID: 1, bounds: CGRect(x: 1, y: 2, width: 3, height: 4))
+            XCTAssertEqual(persistence.loadAgentRuns().first?.state, .terminal)
+            XCTAssertEqual(persistence.loadCaptureSessions().first?.status, "COMPLETED")
+            persistence.deleteAgentRun(run.id)
+            XCTAssertTrue(persistence.loadAgentRuns().isEmpty)
+            XCTAssertEqual(persistence.load(), [task])
+        }
+    }
+
+    private func withSQLiteStore(_ body: (CoreDataLocalStore, URL) throws -> Void) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("TodoPilotStorageTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try autoreleasepool {
+            let url = directory.appendingPathComponent("fixture.sqlite")
+            let persistence = CoreDataLocalStore(storeURL: url, defaults: defaults, migratesLegacyUserDefaults: false)
+            try body(persistence, url)
+        }
+    }
+
+    private func storageRecords(_ persistence: CoreDataLocalStore, entity: String) throws -> [NSManagedObject] {
+        let request = NSFetchRequest<NSManagedObject>(entityName: entity)
+        request.sortDescriptors = [NSSortDescriptor(key: "localID", ascending: true)]
+        return try persistence.storageTestContext.fetch(request)
+    }
+
+    private func storageObjectIDs(_ persistence: CoreDataLocalStore, entity: String, key: String) throws -> [UUID: NSManagedObjectID] {
+        try storageRecords(persistence, entity: entity).reduce(into: [:]) { result, object in
+            if let id = object.value(forKey: key) as? UUID { result[id] = object.objectID }
+        }
+    }
+
+    private func duplicateStorageRecord(_ original: NSManagedObject, in context: NSManagedObjectContext) -> NSManagedObject {
+        let object = NSEntityDescription.insertNewObject(forEntityName: original.entity.name!, into: context)
+        for key in original.entity.attributesByName.keys {
+            object.setValue(original.value(forKey: key), forKey: key)
+        }
+        return object
+    }
 }
 
 @MainActor
@@ -800,5 +1127,34 @@ private final class RecordingTaskStorePersistence: TaskStorePersistence {
 
     func save(_ tasks: [TodoTask]) {
         savedSnapshots.append(tasks)
+    }
+}
+
+private final class PersistenceSaveRecorder {
+    private var token: NSObjectProtocol?
+    private(set) var commitCount = 0
+    private(set) var insertedCount = 0
+    private(set) var updatedCount = 0
+    private(set) var deletedCount = 0
+
+    init(context: NSManagedObjectContext) {
+        token = NotificationCenter.default.addObserver(forName: .NSManagedObjectContextDidSave, object: context, queue: nil) { [weak self] notification in
+            guard let self else { return }
+            commitCount += 1
+            insertedCount += (notification.userInfo?[NSInsertedObjectsKey] as? Set<NSManagedObject>)?.count ?? 0
+            updatedCount += (notification.userInfo?[NSUpdatedObjectsKey] as? Set<NSManagedObject>)?.count ?? 0
+            deletedCount += (notification.userInfo?[NSDeletedObjectsKey] as? Set<NSManagedObject>)?.count ?? 0
+        }
+    }
+
+    func clear() {
+        commitCount = 0
+        insertedCount = 0
+        updatedCount = 0
+        deletedCount = 0
+    }
+
+    deinit {
+        if let token { NotificationCenter.default.removeObserver(token) }
     }
 }

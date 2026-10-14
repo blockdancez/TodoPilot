@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import SwiftUI
 import XCTest
 @testable import TodoPilot
@@ -216,6 +217,163 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(success.agentOutcomeBadge, .success)
         XCTAssertEqual(warning.agentOutcomeBadge, .warning)
         XCTAssertNil(task.agentOutcomeBadge)
+    }
+
+    @MainActor
+    func testFlightPresentationCancellationRejectsLateStartAndStopsRegisteredTimer() {
+        let cancelled = FlightReminderPresentationLifecycle()
+        cancelled.cancel()
+        XCTAssertFalse(cancelled.begin(at: 100))
+        let lateTimer = Timer(timeInterval: 1, repeats: true) { _ in XCTFail("Cancelled presentation ticked") }
+        cancelled.register(lateTimer)
+        XCTAssertFalse(lateTimer.isValid)
+        XCTAssertFalse(cancelled.hasScheduledTimer)
+
+        let active = FlightReminderPresentationLifecycle()
+        XCTAssertTrue(active.begin(at: 100))
+        let timer = Timer(timeInterval: 1, repeats: true) { _ in }
+        active.register(timer)
+        XCTAssertTrue(active.hasScheduledTimer)
+        XCTAssertEqual(active.elapsed(at: 106, visualLead: 0.145), 6.145, accuracy: 0.0001)
+        active.cancel()
+        XCTAssertFalse(timer.isValid)
+        XCTAssertFalse(active.hasScheduledTimer)
+        XCTAssertFalse(active.begin(at: 107))
+    }
+
+    @MainActor
+    func testImmediateFlightReplacementCancelsEveryOldPresentation() async throws {
+        let controller = FlightReminderPanelController(logger: nil)
+        defer { controller.dismiss() }
+        let actions = FlightReminderActions(
+            completeTitle: "Done", snoozeTitle: "Later", complete: { _ in },
+            snooze10Minutes: { _ in }, openDetails: { _ in }, muteAll: {},
+            dismiss: { _ in XCTFail("Dismissed presentation delivered a late action") }
+        )
+        var retired: [FlightReminderPresentationLifecycle] = []
+        for _ in 0..<10 {
+            autoreleasepool {
+                controller.show(task: TodoTask(title: "Immediate replacement"), actions: actions, playSound: false, bannerStyle: .normal)
+                if let lifecycle = controller.activeLifecycle { retired.append(lifecycle) }
+                controller.show(task: TodoTask(title: "New presentation"), actions: actions, playSound: false, bannerStyle: .normal)
+                XCTAssertTrue(retired.last?.isCancelled == true)
+                XCTAssertFalse(retired.last?.hasScheduledTimer == true)
+                if let lifecycle = controller.activeLifecycle { retired.append(lifecycle) }
+                controller.dismiss()
+            }
+        }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        XCTAssertNil(controller.panel)
+        XCTAssertTrue(retired.allSatisfy { $0.isCancelled && !$0.hasScheduledTimer })
+        XCTAssertTrue(retired.allSatisfy { !$0.begin(at: ProcessInfo.processInfo.systemUptime) })
+    }
+
+    @MainActor
+    func testNormalFlightAutomaticallyDismissesAfterActualElapsedTime() throws {
+        let controller = FlightReminderPanelController(logger: nil)
+        defer { controller.dismiss() }
+        var reasons: [String] = []
+        let actions = FlightReminderActions(
+            completeTitle: "Done", snoozeTitle: "Later", complete: { _ in },
+            snooze10Minutes: { _ in }, openDetails: { _ in }, muteAll: {},
+            dismiss: { reasons.append($0) }
+        )
+        weak var shownPanel: NSPanel?
+        var lifecycle: FlightReminderPresentationLifecycle?
+        var windowNumber = 0
+        func targetWindowIsListed() -> Bool {
+            let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+            return windows.contains {
+                ($0[kCGWindowOwnerPID as String] as? Int) == Int(ProcessInfo.processInfo.processIdentifier)
+                    && ($0[kCGWindowNumber as String] as? Int) == windowNumber
+            }
+        }
+        // XCTest 的 async 外层池可跨整次测试存活；用真实主运行循环驱动自然 tick，
+        // 显示、自然自动关闭和框架临时对象均限制在同一明确释放池内，退池后检查资源。
+        autoreleasepool {
+            controller.show(task: TodoTask(title: "Automatic dismissal"), actions: actions, playSound: false, bannerStyle: .normal)
+            shownPanel = controller.panel
+            windowNumber = controller.panel?.windowNumber ?? 0
+            lifecycle = controller.activeLifecycle
+            let deadline = ProcessInfo.processInfo.systemUptime + FlightReminderTiming.flightDuration + FlightReminderTiming.autoDismissDelay + 3
+            while controller.panel != nil, ProcessInfo.processInfo.systemUptime < deadline {
+                RunLoop.main.run(until: Date().addingTimeInterval(0.02))
+            }
+            XCTAssertNil(controller.panel)
+        }
+        XCTAssertGreaterThan(windowNumber, 0)
+        let releaseDeadline = ProcessInfo.processInfo.systemUptime + 1
+        while autoreleasepool(invoking: { shownPanel != nil || targetWindowIsListed() }), ProcessInfo.processInfo.systemUptime < releaseDeadline {
+            autoreleasepool { RunLoop.main.run(until: Date().addingTimeInterval(0.02)) }
+        }
+        autoreleasepool {
+            XCTAssertNil(shownPanel)
+            XCTAssertFalse(targetWindowIsListed())
+        }
+        XCTAssertEqual(reasons, ["auto"])
+        let completedLifecycle = try XCTUnwrap(lifecycle)
+        XCTAssertTrue(completedLifecycle.isCancelled)
+        XCTAssertFalse(completedLifecycle.hasScheduledTimer)
+    }
+
+    @MainActor
+    func testFlightReminderPanelsReleaseWindowsAfterRepeatedShowAndDismiss() async throws {
+        func ownedWindowNumbers() -> Set<Int> {
+            let windows = CGWindowListCopyWindowInfo(.optionAll, kCGNullWindowID) as? [[String: Any]] ?? []
+            return Set(windows.compactMap { window in
+                guard (window[kCGWindowOwnerPID as String] as? Int) == Int(ProcessInfo.processInfo.processIdentifier) else { return nil }
+                return window[kCGWindowNumber as String] as? Int
+            })
+        }
+        let controller = FlightReminderPanelController(logger: nil)
+        defer { controller.dismiss() }
+        let task = TodoTask(title: "Panel lifecycle")
+        var unexpectedDismissCallbacks = 0
+        let actions = FlightReminderActions(
+            completeTitle: "Done", snoozeTitle: "Later",
+            complete: { _ in }, snooze10Minutes: { _ in }, openDetails: { _ in }, muteAll: {},
+            dismiss: { _ in unexpectedDismissCallbacks += 1 }
+        )
+        enum PanelLifecycleFailure: Error { case retainedPanel }
+        @MainActor func showAndDismissOnePanel() async throws {
+            weak var shownPanel: NSPanel?
+            var windowNumber = 0
+            // XCTest 的异步任务不像 NSApp 事件循环那样每个事件排空 Cocoa 临时对象。
+            // 明确划分显示、断言、关闭的自动释放池边界，仍检查真实弱引用和 CG 窗口释放。
+            autoreleasepool {
+                controller.show(task: task, actions: actions, playSound: false, bannerStyle: .normal)
+                shownPanel = controller.panel
+                windowNumber = controller.panel?.windowNumber ?? 0
+            }
+            XCTAssertGreaterThan(windowNumber, 0)
+            try await Task.sleep(nanoseconds: 60_000_000)
+            autoreleasepool {
+                XCTAssertTrue(controller.panel?.isVisible == true)
+                XCTAssertTrue(ownedWindowNumbers().contains(windowNumber))
+            }
+            autoreleasepool {
+                controller.dismiss()
+                controller.dismiss()
+            }
+            try await Task.sleep(nanoseconds: 60_000_000)
+            autoreleasepool { XCTAssertNil(controller.panel) }
+            // AppKit 对象释放和 WindowServer 移除记录不同步；两者都必须在同一有界期限内释放。
+            // 不能用固定 60ms 帧时长把系统负载下的正常回收误报为泄漏。
+            let deadline = Date().addingTimeInterval(1)
+            while autoreleasepool(invoking: { shownPanel != nil || ownedWindowNumbers().contains(windowNumber) }), Date() < deadline {
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            let removed = autoreleasepool { !ownedWindowNumbers().contains(windowNumber) }
+            autoreleasepool { XCTAssertNil(shownPanel) }
+            XCTAssertTrue(removed)
+            guard removed, shownPanel == nil else { throw PanelLifecycleFailure.retainedPanel }
+        }
+        // 首次 SwiftUI 展示可能创建框架辅助窗口，先完整验证预热的提醒本身已释放，再取基线。
+        try await showAndDismissOnePanel()
+        let baselineWindows = ownedWindowNumbers()
+        for _ in 0..<30 { try await showAndDismissOnePanel() }
+        XCTAssertEqual(ownedWindowNumbers().count, baselineWindows.count)
+        XCTAssertEqual(unexpectedDismissCallbacks, 0)
     }
 
     func testFlightReminderActionsKeepTaskPresentationCompatibility() {
@@ -899,6 +1057,26 @@ final class ReminderSchedulerTests: XCTestCase {
         ))
     }
 
+    func testTodoPilotSingleInstanceLockAllowsOnlyOneStatusIslandOwner() throws {
+        let lockURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TodoPilotSingleInstanceLockTests", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+            .appendingPathComponent("instance.lock", isDirectory: false)
+        defer {
+            try? FileManager.default.removeItem(at: lockURL.deletingLastPathComponent())
+        }
+
+        let first = TodoPilotSingleInstanceLock(lockURL: lockURL)
+        let second = TodoPilotSingleInstanceLock(lockURL: lockURL)
+
+        XCTAssertEqual(first.acquire(), .acquired)
+        XCTAssertEqual(second.acquire(), .alreadyHeld)
+
+        first.release()
+
+        XCTAssertEqual(second.acquire(), .acquired)
+    }
+
     func testStatusIslandCompactCarouselRotatesActiveTasks() throws {
         let first = TodoTask(title: "First")
         let second = TodoTask(title: "Second")
@@ -993,6 +1171,110 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertTrue(policy.shouldAnimate(requested: true, reduceMotion: false))
         XCTAssertFalse(policy.shouldAnimate(requested: false, reduceMotion: false))
         XCTAssertFalse(policy.shouldAnimate(requested: true, reduceMotion: true))
+        XCTAssertEqual(PixelPropellerAnimationPolicy.pixelMark.frameRate, 10)
+        XCTAssertEqual(PixelPropellerAnimationPolicy.pixelMark.frameCount, 2)
+        XCTAssertFalse(PixelPropellerAnimationPolicy.pixelMark.shouldAnimate(requested: true, reduceMotion: true))
+    }
+
+    @MainActor
+    func testStatusIslandSnapshotRefreshesOrderingAfterClockMovesBackwards() {
+        let dueAt = Date(timeIntervalSince1970: 20_000)
+        let lowPriority = TodoTask(title: "Low", priority: .low, dueAt: dueAt)
+        let highPriority = TodoTask(title: "High", priority: .high)
+        let store = TaskStore(seed: [lowPriority, highPriority])
+        let cache = StatusIslandTaskSnapshotCache()
+        let afterDue = cache.snapshot(taskStore: store, runs: [], now: dueAt.addingTimeInterval(1))
+        XCTAssertEqual(afterDue.orderedActiveTasks.first?.id, lowPriority.id)
+        let beforeDue = cache.snapshot(taskStore: store, runs: [], now: dueAt.addingTimeInterval(-1))
+        XCTAssertEqual(beforeDue.orderedActiveTasks.first?.id, highPriority.id)
+        XCTAssertEqual(cache.recomputationCount, 2)
+        let afterDueAgain = cache.snapshot(taskStore: store, runs: [], now: dueAt.addingTimeInterval(2))
+        XCTAssertEqual(afterDueAgain.orderedActiveTasks.first?.id, lowPriority.id)
+        XCTAssertEqual(cache.recomputationCount, 3)
+    }
+
+    @MainActor
+    func testStatusIslandSnapshotStaysBoundedDuringIdleAndInvalidatesOnTaskChanges() {
+        let now = Date(timeIntervalSince1970: 20_000)
+        let tasks = (0..<2_200).map { TodoTask(title: "Task \($0)") }
+        let store = TaskStore(seed: tasks)
+        let cache = StatusIslandTaskSnapshotCache()
+        for tick in 0..<600 {
+            let snapshot = cache.snapshot(taskStore: store, runs: [], now: now.addingTimeInterval(Double(tick) * 3))
+            XCTAssertEqual(snapshot.orderedActiveTasks.count, tasks.count)
+        }
+        XCTAssertEqual(cache.recomputationCount, 1)
+
+        store.complete(tasks[0].id)
+        let updated = cache.snapshot(taskStore: store, runs: [], now: now.addingTimeInterval(1_801))
+        XCTAssertEqual(cache.recomputationCount, 2)
+        XCTAssertFalse(updated.orderedActiveTasks.contains { $0.id == tasks[0].id })
+    }
+
+    @MainActor
+    func testPropellerAnimationStopsWhileHiddenOrDetachedAndReusesFrames() async throws {
+        let window = NSPanel(
+            contentRect: NSRect(x: 100, y: 100, width: 80, height: 80),
+            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false
+        )
+        window.isReleasedWhenClosed = false
+        // 测试只测螺旋桨生命周期，不让系统窗口入场动画在 fixture 销毁后异步释放。
+        window.animationBehavior = .none
+        window.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        window.level = .statusBar
+        window.hidesOnDeactivate = false
+        defer { window.orderOut(nil); window.contentView = nil; window.close() }
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 80, height: 80))
+        let propeller = PixelPropellerAnimationView(frame: NSRect(x: 20, y: 20, width: 16, height: 30))
+        let configuration = PixelPropellerFrameConfiguration(
+            size: CGSize(width: 16, height: 30),
+            bladeLong: 28, bladeShort: 3, horizontalLong: 14, horizontalShort: 2
+        )
+        let key = PixelPropellerAnimationView.animationKey
+        propeller.update(configuration: configuration, policy: .default)
+        XCTAssertNil(propeller.layer?.animation(forKey: key))
+        container.addSubview(propeller)
+        window.contentView = container
+        @MainActor func waitForAnimation(running: Bool) async throws {
+            let deadline = ProcessInfo.processInfo.systemUptime + 2
+            while ProcessInfo.processInfo.systemUptime < deadline {
+                let hasAnimation = propeller.layer?.animation(forKey: key) != nil
+                let visible = window.isVisible && window.occlusionState.contains(.visible)
+                if running ? (visible && hasAnimation) : !hasAnimation { break }
+                try await Task.sleep(nanoseconds: 20_000_000)
+            }
+            if running {
+                XCTAssertTrue(window.isVisible && window.occlusionState.contains(.visible))
+                XCTAssertNotNil(propeller.layer?.animation(forKey: key))
+            } else {
+                XCTAssertNil(propeller.layer?.animation(forKey: key))
+            }
+        }
+        window.orderFrontRegardless()
+        try await waitForAnimation(running: true)
+        let renderCount = propeller.frameRenderCount
+        let observerCount = propeller.animationObserverCount
+
+        for _ in 0..<3 {
+            window.orderOut(nil)
+            try await waitForAnimation(running: false)
+            window.orderFrontRegardless()
+            try await waitForAnimation(running: true)
+            XCTAssertEqual(propeller.frameRenderCount, renderCount)
+            XCTAssertEqual(propeller.animationObserverCount, observerCount)
+        }
+        propeller.isHidden = true
+        XCTAssertNil(propeller.layer?.animation(forKey: key))
+        propeller.isHidden = false
+        XCTAssertNotNil(propeller.layer?.animation(forKey: key))
+        propeller.removeFromSuperview()
+        XCTAssertNil(propeller.layer?.animation(forKey: key))
+        XCTAssertEqual(propeller.animationObserverCount, 0)
+        container.addSubview(propeller)
+        XCTAssertNotNil(propeller.layer?.animation(forKey: key))
+        XCTAssertEqual(propeller.frameRenderCount, renderCount)
+        propeller.stopAnimating()
+        XCTAssertNil(propeller.layer?.animation(forKey: key))
     }
 
     func testStatusIslandHeaderOnlyShowsCarouselTitleWhenCollapsed() {
@@ -1032,6 +1314,31 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertLessThan(metrics.panelSize.width, expandedMetrics.panelSize.width)
         XCTAssertLessThan(metrics.panelSize.height, expandedMetrics.panelSize.height)
         XCTAssertLessThan(metrics.hitTestFrame.height, expandedMetrics.hitTestFrame.height)
+    }
+
+    func testStatusIslandOrdinaryExpandedHeightFollowsItsVisibleTaskRows() {
+        let geometry = StatusIslandScreenGeometry(
+            frame: CGRect(x: 0, y: 0, width: 1440, height: 900),
+            visibleFrame: CGRect(x: 0, y: 0, width: 1440, height: 875)
+        )
+        let oneTask = StatusIslandMetrics(
+            screenGeometry: geometry,
+            isExpanded: true,
+            ordinaryActiveTaskCount: 1
+        )
+        let fourTasks = StatusIslandMetrics(
+            screenGeometry: geometry,
+            isExpanded: true,
+            ordinaryActiveTaskCount: 4
+        )
+
+        XCTAssertEqual(oneTask.islandSize.height, 172)
+        XCTAssertEqual(fourTasks.islandSize.height, 322)
+        XCTAssertEqual(
+            fourTasks.islandSize.height - oneTask.islandSize.height,
+            StatusIslandTaskLayoutPolicy.taskRowHeight * 3
+        )
+        XCTAssertEqual(StatusIslandTaskLayoutPolicy.taskListHeight(activeTaskCount: 1), 50)
     }
 
     func testStatusIslandCollapseKeepsTopCenterAnchorInsteadOfDriftingFromLeftEdge() {
@@ -1248,6 +1555,11 @@ final class ReminderSchedulerTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        // 测试由 Swift 管理窗口生命周期，close 不得再次释放窗口；表单断言无需系统变换动画。
+        parent.isReleasedWhenClosed = false
+        sheet.isReleasedWhenClosed = false
+        parent.animationBehavior = .none
+        sheet.animationBehavior = .none
         var didEndSheet = false
         parent.beginSheet(sheet) { response in
             didEndSheet = response == .cancel
@@ -1275,6 +1587,11 @@ final class ReminderSchedulerTests: XCTestCase {
             backing: .buffered,
             defer: false
         )
+        // 测试由 Swift 管理窗口生命周期，close 不得再次释放窗口；表单断言无需系统变换动画。
+        parent.isReleasedWhenClosed = false
+        sheet.isReleasedWhenClosed = false
+        parent.animationBehavior = .none
+        sheet.animationBehavior = .none
         var didEndSheet = false
         parent.beginSheet(sheet) { response in
             didEndSheet = response == .cancel

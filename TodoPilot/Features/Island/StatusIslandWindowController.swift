@@ -96,10 +96,14 @@ final class StatusIslandWindowController: ObservableObject {
         }
 
         let targetScreen = targetScreen()
+        let ordinaryActiveTaskCount = TodoTaskIdentityRepair
+            .deduplicated(environment.taskStore.activeTasks)
+            .count
         let metrics = StatusIslandMetrics(
             screen: targetScreen,
             isExpanded: isExpanded,
-            keepsExpandedPanelFrame: isExpanding || isCollapsing
+            keepsExpandedPanelFrame: isExpanding || isCollapsing,
+            ordinaryActiveTaskCount: ordinaryActiveTaskCount
         )
         let panel = ensurePanel(metrics: metrics)
         let rootView = AnyView(StatusIslandFloatingView(
@@ -276,7 +280,7 @@ final class StatusIslandWindowController: ObservableObject {
         guard panel.frame.integral != placement.frame.integral else {
             return
         }
-        if animated {
+        if animated && !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
             panel.animator().setFrame(placement.frame, display: true)
         } else {
             panel.setFrame(placement.frame, display: true)
@@ -361,6 +365,9 @@ final class StatusIslandWindowController: ObservableObject {
 
     private func handleHoverState(isInside: Bool) {
         if isInside {
+            guard isMouseInsideIslandHitTestFrame() else {
+                return
+            }
             hoverCollapseWorkItem?.cancel()
             hoverCollapseWorkItem = nil
             if hoverPolicy.expandsOnMouseEnter, !isExpanded {
@@ -552,13 +559,17 @@ final class StatusIslandTaskSnapshotCache: ObservableObject {
     private var lastTasks: [TodoTask]?
     private var lastRuns: [AgentRun]?
     private var nextTemporalRefresh: Date?
+    private var lastObservedDate: Date?
     private var cachedSnapshot: StatusIslandTaskSnapshot?
     private(set) var recomputationCount = 0
 
     func snapshot(taskStore: TaskStore, runs: [AgentRun], now: Date) -> StatusIslandTaskSnapshot {
         let tasks = taskStore.tasks
+        // 系统时间回拨可能让逾期任务恢复未逾期，必须重算依赖时间的排序。
+        let movedBackwards = lastObservedDate.map { now < $0 } ?? false
+        lastObservedDate = now
         let crossedTemporalBoundary = nextTemporalRefresh.map { now >= $0 } ?? false
-        if !crossedTemporalBoundary,
+        if !movedBackwards, !crossedTemporalBoundary,
            tasks == lastTasks,
            runs == lastRuns,
            let cachedSnapshot {
@@ -759,6 +770,33 @@ struct StatusIslandPlacement {
     }
 }
 
+struct StatusIslandTaskLayoutPolicy {
+    static let visibleTaskLimit = 4
+    static let taskRowHeight: CGFloat = 50
+    static let emptyTaskListHeight: CGFloat = 60
+
+    static func visibleTaskCount(activeTaskCount: Int) -> Int {
+        min(max(activeTaskCount, 0), visibleTaskLimit)
+    }
+
+    static func taskListHeight(activeTaskCount: Int) -> CGFloat {
+        let count = visibleTaskCount(activeTaskCount: activeTaskCount)
+        return count == 0 ? emptyTaskListHeight : CGFloat(count) * taskRowHeight
+    }
+
+    static func expandedHeight(isNotchedScreen: Bool, activeTaskCount: Int) -> CGFloat {
+        let count = visibleTaskCount(activeTaskCount: activeTaskCount)
+        if count == 0 {
+            return isNotchedScreen ? 164 : 172
+        }
+
+        let fullHeight: CGFloat = isNotchedScreen ? 304 : 322
+        let hiddenRowCount = visibleTaskLimit - count
+        let reducedHeight = fullHeight - CGFloat(hiddenRowCount) * taskRowHeight
+        return max(isNotchedScreen ? 164 : 172, reducedHeight)
+    }
+}
+
 struct StatusIslandMetrics {
     let isNotchedScreen: Bool
     let notchHeight: CGFloat
@@ -778,19 +816,22 @@ struct StatusIslandMetrics {
     init(
         screen: NSScreen?,
         isExpanded: Bool,
-        keepsExpandedPanelFrame: Bool = false
+        keepsExpandedPanelFrame: Bool = false,
+        ordinaryActiveTaskCount: Int = StatusIslandTaskLayoutPolicy.visibleTaskLimit
     ) {
         self.init(
             screenGeometry: StatusIslandScreenGeometry(screen: screen),
             isExpanded: isExpanded,
-            keepsExpandedPanelFrame: keepsExpandedPanelFrame
+            keepsExpandedPanelFrame: keepsExpandedPanelFrame,
+            ordinaryActiveTaskCount: ordinaryActiveTaskCount
         )
     }
 
     init(
         screenGeometry: StatusIslandScreenGeometry,
         isExpanded: Bool,
-        keepsExpandedPanelFrame: Bool = false
+        keepsExpandedPanelFrame: Bool = false,
+        ordinaryActiveTaskCount: Int = StatusIslandTaskLayoutPolicy.visibleTaskLimit
     ) {
         let screenFrame = screenGeometry.frame
         let hasNotch = screenGeometry.hasUsableCameraHousing
@@ -812,7 +853,10 @@ struct StatusIslandMetrics {
         compactWidth = min(compactTarget, compactMax) - 4
         let expandedTarget = hasNotch ? max(notchWidth + 310, 500) : 500
         expandedWidth = min(expandedTarget, min(screenWidthLimit, hasNotch ? 560 : 500))
-        let expandedHeight: CGFloat = hasNotch ? 304 : 322
+        let expandedHeight = StatusIslandTaskLayoutPolicy.expandedHeight(
+            isNotchedScreen: hasNotch,
+            activeTaskCount: ordinaryActiveTaskCount
+        )
 
         islandSize = isExpanded
             ? CGSize(width: expandedWidth, height: expandedHeight)
@@ -843,6 +887,7 @@ private extension NSScreen {
 }
 
 private struct StatusIslandFloatingView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject private var environment: AppEnvironment
     @ObservedObject var taskStore: TaskStore
     @StateObject private var taskSnapshotCache = StatusIslandTaskSnapshotCache()
@@ -875,7 +920,12 @@ private struct StatusIslandFloatingView: View {
             }
             .frame(width: metrics.panelSize.width, height: metrics.panelSize.height, alignment: .top)
         }
-        .animation(.interactiveSpring(response: 0.30, dampingFraction: 0.88, blendDuration: 0.06), value: isExpanded)
+        .animation(
+            reduceMotion
+                ? nil
+                : .interactiveSpring(response: 0.30, dampingFraction: 0.88, blendDuration: 0.06),
+            value: isExpanded
+        )
         .accessibilityElement(children: .contain)
     }
 }
@@ -935,6 +985,10 @@ private struct StatusIslandSurface: View {
 
     private var expandedContent: some View {
         let copy = environment.copy
+        let activeTaskCount = taskSnapshot.orderedActiveTasks.count
+        let taskListHeight = StatusIslandTaskLayoutPolicy.taskListHeight(
+            activeTaskCount: activeTaskCount
+        )
 
         return VStack(spacing: 0) {
             HStack {
@@ -959,7 +1013,9 @@ private struct StatusIslandSurface: View {
                 .frame(height: 1)
 
             VStack(spacing: 0) {
-                ForEach(Array(taskSnapshot.orderedActiveTasks.prefix(4))) { task in
+                ForEach(Array(taskSnapshot.orderedActiveTasks.prefix(
+                    StatusIslandTaskLayoutPolicy.visibleTaskLimit
+                ))) { task in
                     StatusIslandTaskRow(
                         task: task,
                         run: taskSnapshot.run(for: task.id),
@@ -974,10 +1030,14 @@ private struct StatusIslandSurface: View {
                     Text(copy.clear)
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(.white.opacity(0.5))
-                        .frame(maxWidth: .infinity, minHeight: 118)
+                        .frame(
+                            maxWidth: .infinity,
+                            minHeight: StatusIslandTaskLayoutPolicy.emptyTaskListHeight
+                        )
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 172, alignment: .top)
+            .frame(maxWidth: .infinity)
+            .frame(height: taskListHeight, alignment: .top)
 
             Rectangle()
                 .fill(.white.opacity(0.08))
