@@ -625,8 +625,8 @@ private struct OnboardingGuideView: View {
                 if environment.detectedAgentProviders.contains(.codex) {
                     Text(rootText(
                         copy,
-                        en: "Codex app: open Settings > Hooks > User configuration, then trust both pending items. Codex CLI: enter /hooks.",
-                        zh: "Codex 桌面版：打开“设置 → 钩子 → 用户配置”，分别信任两项待审核内容；Codex CLI 可输入 /hooks。"
+                        en: "Codex app: open Settings > Hooks > User configuration, then trust all pending TodoPilot items. Codex CLI: enter /hooks.",
+                        zh: "Codex 桌面版：打开“设置 → 钩子 → 用户配置”，信任全部待审核的 TodoPilot 项；Codex CLI 可输入 /hooks。"
                     ))
                         .font(.system(size: 13, weight: .bold))
                         .foregroundStyle(RootTheme.warning)

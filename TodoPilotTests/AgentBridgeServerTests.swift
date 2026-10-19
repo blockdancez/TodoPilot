@@ -25,6 +25,26 @@ final class AgentBridgeServerTests: XCTestCase {
         XCTAssertEqual(restored, envelope)
     }
 
+    func testEnvelopeAcceptsLegacySecondsAndPreservesFractionalTimestamp() throws {
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+        for (timestamp, expectedDate) in [
+            ("2027-01-15T08:00:00Z", base),
+            ("2027-01-15T08:00:00.125Z", base.addingTimeInterval(0.125))
+        ] {
+            let data = try JSONSerialization.data(withJSONObject: [
+                "schemaVersion": 1,
+                "provider": "CODEX",
+                "event": "started",
+                "sessionHash": String(repeating: "a", count: 64),
+                "occurredAt": timestamp
+            ])
+
+            let restored = try AgentBridgeEnvelopeValidator.decode(data)
+
+            XCTAssertEqual(restored.occurredAt, expectedDate)
+        }
+    }
+
     func testEnvelopeRejectsUnknownVersionAndOversize() throws {
         let envelope = TodoPilot.AgentHookEnvelopeV1(
             schemaVersion: 2,

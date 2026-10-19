@@ -467,7 +467,7 @@ struct AgentHookInstaller {
         case .claudeCode:
             return ["UserPromptSubmit", "Stop", "StopFailure", "SessionEnd"]
         case .codex:
-            return ["UserPromptSubmit", "Stop"]
+            return ["UserPromptSubmit", "Stop", "Interrupt", "SessionEnd"]
         case .cursor:
             return ["beforeSubmitPrompt", "stop", "sessionEnd"]
         }

@@ -17,10 +17,25 @@ enum TodoPilotAgentHookMain {
         guard let input = readBoundedStandardInput() else { return }
 
         let adapter = AgentHookAdapter()
-        guard let envelope = try? adapter.envelope(from: input, provider: provider) else { return }
+        let envelope: AgentHookEnvelopeV1
+        do {
+            envelope = try adapter.envelope(from: input, provider: provider)
+        } catch AgentHookAdapterError.unverifiedCodexSession {
+            // 仅输出固定诊断码，不泄露路径、标识或提示词；不影响 Codex 原任务执行。
+            FileHandle.standardError.write(Data("todopilot_codex_session_unverified\n".utf8))
+            return
+        } catch {
+            return
+        }
 
         let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
+        // 保留毫秒顺序，避免同一秒内迟到的 SessionEnd 取消较新的回合。
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            var container = encoder.singleValueContainer()
+            try container.encode(formatter.string(from: date))
+        }
         guard let encoded = try? encoder.encode(envelope), encoded.count <= 16 * 1024 else { return }
 
         UnixDomainSocketClient(timeoutMilliseconds: 250).send(

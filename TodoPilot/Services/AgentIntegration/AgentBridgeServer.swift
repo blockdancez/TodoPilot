@@ -123,7 +123,21 @@ enum AgentBridgeEnvelopeValidator {
             throw AgentBridgeValidationError.oversized
         }
         let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
+        decoder.dateDecodingStrategy = .custom { decoder in
+            let container = try decoder.singleValueContainer()
+            let value = try container.decode(String.self)
+            let formatter = ISO8601DateFormatter()
+            // 保留新 Hook 的毫秒先后顺序，同时兼容旧 Helper 的整秒时间。
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            if let date = formatter.date(from: value) {
+                return date
+            }
+            formatter.formatOptions = [.withInternetDateTime]
+            guard let date = formatter.date(from: value) else {
+                throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid agent event timestamp")
+            }
+            return date
+        }
         guard let envelope = try? decoder.decode(AgentHookEnvelopeV1.self, from: data) else {
             throw AgentBridgeValidationError.malformed
         }

@@ -71,9 +71,13 @@ final class AgentHookInstallerTests: XCTestCase {
         let codex = try readJSON(codexURL)
         XCTAssertEqual(nestedHookCount(in: codex, event: "UserPromptSubmit"), 1)
         XCTAssertEqual(nestedHookCount(in: codex, event: "Stop"), 1)
+        XCTAssertEqual(nestedHookCount(in: codex, event: "Interrupt"), 1)
+        XCTAssertEqual(nestedHookCount(in: codex, event: "SessionEnd"), 1)
         XCTAssertEqual(nestedHookCount(in: codex, event: "SubagentStart"), 0)
         XCTAssertEqual(nestedHookCount(in: codex, event: "SubagentStop"), 0)
         XCTAssertEqual(firstNestedTimeout(in: codex, event: "Stop"), 2)
+        XCTAssertEqual(firstNestedTimeout(in: codex, event: "Interrupt"), 2)
+        XCTAssertEqual(firstNestedTimeout(in: codex, event: "SessionEnd"), 2)
 
         let cursor = try readJSON(cursorURL)
         XCTAssertEqual(cursorHookCount(in: cursor, event: "beforeSubmitPrompt"), 1)
@@ -117,6 +121,55 @@ final class AgentHookInstallerTests: XCTestCase {
 
         _ = try installer.install(providers: [.codex])
         XCTAssertTrue(installer.hasInstalledHook(for: .codex))
+    }
+
+    func testCodexLifecycleHookUpgradePreservesUserHooksAndOtherProviders() throws {
+        let installer = makeInstaller()
+        _ = try installer.install()
+        let codexURL = installer.configurationURL(for: .codex)
+        let claudeURL = installer.configurationURL(for: .claudeCode)
+        let cursorURL = installer.configurationURL(for: .cursor)
+        let originalClaude = try Data(contentsOf: claudeURL)
+        let originalCursor = try Data(contentsOf: cursorURL)
+        let userEntry: [String: Any] = [
+            "matcher": "",
+            "hooks": [["type": "command", "command": "user-lifecycle-hook", "timeout": 7]]
+        ]
+        var codex = try readJSON(codexURL)
+        var hooks = try XCTUnwrap(codex["hooks"] as? [String: Any])
+        hooks["Interrupt"] = [userEntry]
+        hooks["SessionEnd"] = [userEntry]
+        codex["hooks"] = hooks
+        try writeJSON(codex, to: codexURL)
+        XCTAssertFalse(installer.hasInstalledHook(for: .codex))
+
+        _ = try installer.install(providers: [.codex])
+
+        let upgraded = try readJSON(codexURL)
+        let upgradedHooks = try XCTUnwrap(upgraded["hooks"] as? [String: Any])
+        for event in ["Interrupt", "SessionEnd"] {
+            let entries = try XCTUnwrap(upgradedHooks[event] as? [[String: Any]])
+            XCTAssertEqual(entries.count, 2)
+            XCTAssertTrue(entries.contains { NSDictionary(dictionary: $0).isEqual(to: userEntry) })
+            XCTAssertTrue(entries.contains { entry in
+                let handlers = entry["hooks"] as? [[String: Any]]
+                return handlers?.first?["timeout"] as? Int == 2
+            })
+        }
+        XCTAssertEqual(nestedHookCount(in: upgraded, event: "UserPromptSubmit"), 1)
+        XCTAssertEqual(nestedHookCount(in: upgraded, event: "Stop"), 1)
+        XCTAssertTrue(installer.hasInstalledHook(for: .codex))
+        XCTAssertEqual(try Data(contentsOf: claudeURL), originalClaude)
+        XCTAssertEqual(try Data(contentsOf: cursorURL), originalCursor)
+
+        try installer.uninstall(providers: [.codex])
+        let uninstalled = try readJSON(codexURL)
+        let uninstalledHooks = try XCTUnwrap(uninstalled["hooks"] as? [String: Any])
+        for event in ["Interrupt", "SessionEnd"] {
+            let entries = try XCTUnwrap(uninstalledHooks[event] as? [[String: Any]])
+            XCTAssertEqual(entries.count, 1)
+            XCTAssertTrue(NSDictionary(dictionary: entries[0]).isEqual(to: userEntry))
+        }
     }
 
     func testRestorePreviouslyAuthorizedProvidersRefreshesOnlyTheSharedHelper() throws {

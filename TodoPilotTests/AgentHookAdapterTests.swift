@@ -98,9 +98,12 @@ final class AgentHookAdapterTests: XCTestCase {
     }
 
     func testCodexUsesThreadAndTurnIdentifiers() throws {
+        let transcript = try makeCodexTranscript(sessionID: "thread-123")
+        defer { try? FileManager.default.removeItem(at: transcript) }
         let envelope = try makeAdapter().envelope(
             from: jsonData([
                 "hook_event_name": "UserPromptSubmit",
+                "transcript_path": transcript.path,
                 "thread_id": "thread-123",
                 "turn_id": "turn-456",
                 "prompt": "Review the installer\nwith all source included",
@@ -117,6 +120,8 @@ final class AgentHookAdapterTests: XCTestCase {
     }
 
     func testCodexRootPromptTextIsNotUsedAsASubagentHeuristic() throws {
+        let transcript = try makeCodexTranscript(sessionID: "session-root")
+        defer { try? FileManager.default.removeItem(at: transcript) }
         for prompt in ["# Overview", "You are an expert at synthetic review"] {
             let envelope = try makeAdapter().envelope(
                 from: jsonData([
@@ -127,7 +132,7 @@ final class AgentHookAdapterTests: XCTestCase {
                     "cwd": "/tmp/project",
                     "model": "synthetic-model",
                     "permission_mode": "default",
-                    "transcript_path": "/tmp/synthetic-transcript.jsonl"
+                    "transcript_path": transcript.path
                 ]),
                 provider: .codex
             )
@@ -138,6 +143,8 @@ final class AgentHookAdapterTests: XCTestCase {
     }
 
     func testCodexAttachmentWrapperUsesActualRequestAsTitle() throws {
+        let transcript = try makeCodexTranscript(sessionID: "thread-with-attachment")
+        defer { try? FileManager.default.removeItem(at: transcript) }
         let prompt = """
         # Files mentioned by the user:
 
@@ -149,6 +156,7 @@ final class AgentHookAdapterTests: XCTestCase {
         let envelope = try makeAdapter().envelope(
             from: jsonData([
                 "hook_event_name": "UserPromptSubmit",
+                "transcript_path": transcript.path,
                 "thread_id": "thread-with-attachment",
                 "turn_id": "turn-with-attachment",
                 "prompt": prompt
@@ -163,9 +171,12 @@ final class AgentHookAdapterTests: XCTestCase {
     }
 
     func testIncompleteCodexAttachmentWrapperDoesNotUseAttachmentMetadataAsTitle() throws {
+        let transcript = try makeCodexTranscript(sessionID: "thread-with-incomplete-attachment")
+        defer { try? FileManager.default.removeItem(at: transcript) }
         let envelope = try makeAdapter().envelope(
             from: jsonData([
                 "hook_event_name": "UserPromptSubmit",
+                "transcript_path": transcript.path,
                 "thread_id": "thread-with-incomplete-attachment",
                 "turn_id": "turn-with-incomplete-attachment",
                 "prompt": "# Files mentioned by the user:\n\n## example.png: /private/tmp/example.png"
@@ -354,6 +365,137 @@ final class AgentHookAdapterTests: XCTestCase {
         XCTAssertThrowsError(try AgentHookAdapter().envelope(from: data, provider: .codex)) { error in
             XCTAssertEqual(error as? AgentHookAdapterError, .unsupportedEvent)
         }
+    }
+
+    func testCodexInternalSessionWithoutTranscriptIsNotImported() throws {
+        for prompt in ["This is an app-generated synthetic task", "## Memory Writing synthetic task", "Consolidate synthetic summaries", "普通文字也不能作为来源依据"] {
+            let payload: [String: Any] = [
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "synthetic-ephemeral",
+                "turn_id": "synthetic-turn",
+                "transcript_path": NSNull(),
+                "prompt": prompt
+            ]
+            XCTAssertThrowsError(try makeAdapter().envelope(from: jsonData(payload), provider: .codex))
+        }
+    }
+
+    func testCodexUserRequestWithInternalLookingTitleIsPreserved() throws {
+        let transcript = try makeCodexTranscript(sessionID: "synthetic-user")
+        defer { try? FileManager.default.removeItem(at: transcript) }
+        for prompt in ["This is an app-generated synthetic task", "## Memory Writing synthetic task", "Consolidate synthetic summaries"] {
+            let envelope = try makeAdapter().envelope(from: jsonData([
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "synthetic-user",
+                "turn_id": "synthetic-turn",
+                "transcript_path": transcript.path,
+                "prompt": prompt
+            ]), provider: .codex)
+            XCTAssertEqual(envelope.title, prompt)
+        }
+    }
+
+    func testCodexNestedTranscriptWithoutAgentIdentifierIsRejected() throws {
+        let transcript = try makeCodexTranscript(
+            sessionID: "synthetic-child",
+            source: ["subagent": ["thread_spawn": ["parent_thread_id": "synthetic-parent"]]],
+            threadSource: "subagent"
+        )
+        defer { try? FileManager.default.removeItem(at: transcript) }
+        XCTAssertThrowsError(try makeAdapter().envelope(from: jsonData([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "synthetic-child",
+            "transcript_path": transcript.path,
+            "prompt": "合成子任务"
+        ]), provider: .codex))
+    }
+
+    func testCodexMismatchedOrMissingMetadataCannotVerifyUserSession() throws {
+        let transcript = try makeCodexTranscript(sessionID: "synthetic-other")
+        defer { try? FileManager.default.removeItem(at: transcript) }
+        for path in [transcript.path, "/nonexistent/synthetic-transcript.jsonl"] {
+            XCTAssertThrowsError(try makeAdapter().envelope(from: jsonData([
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "synthetic-user",
+                "transcript_path": path,
+                "prompt": "合成请求"
+            ]), provider: .codex))
+        }
+    }
+
+    func testCodexInterruptAndSessionEndPreserveTheirTerminalMeaningWithoutTranscript() throws {
+        for (name, event) in [("Interrupt", AgentHookEvent.cancelled), ("SessionEnd", AgentHookEvent.sessionEnded)] {
+            let envelope = try makeAdapter().envelope(from: jsonData([
+                "hook_event_name": name,
+                "session_id": "synthetic-user",
+                "turn_id": "synthetic-turn"
+            ]), provider: .codex)
+            XCTAssertEqual(envelope.event, event)
+            XCTAssertNil(envelope.title)
+        }
+    }
+
+    func testCodexCurrentAttachmentMarkerUsesActualRequest() throws {
+        let transcript = try makeCodexTranscript(sessionID: "synthetic-user")
+        defer { try? FileManager.default.removeItem(at: transcript) }
+        let envelope = try makeAdapter().envelope(from: jsonData([
+            "hook_event_name": "UserPromptSubmit",
+            "session_id": "synthetic-user",
+            "transcript_path": transcript.path,
+            "prompt": "# Files mentioned by the user:\n## synthetic.png: /private/tmp/synthetic.png\n## My request:\n修复合成问题"
+        ]), provider: .codex)
+        XCTAssertEqual(envelope.title, "修复合成问题")
+        let encoded = String(decoding: try encodedEnvelope(envelope), as: UTF8.self)
+        XCTAssertFalse(encoded.contains("synthetic-codex"))
+        XCTAssertFalse(encoded.contains("transcript"))
+        XCTAssertFalse(encoded.contains("synthetic-body"))
+    }
+
+    func testCodexLegacyCLIAndUserOwnedAutomationRemainSupported() throws {
+        for metadata in [
+            ["id": "synthetic-user", "source": "cli"],
+            ["id": "synthetic-user", "source": "exec"],
+            ["id": "synthetic-user", "source": "vscode", "thread_source": "automation"],
+            ["id": "synthetic-user", "source": "vscode", "thread_source": "realtime_voice"]
+        ] {
+            let transcript = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: transcript) }
+            try jsonData(["type": "session_meta", "payload": metadata]).write(to: transcript)
+            XCTAssertNoThrow(try makeAdapter().envelope(from: jsonData([
+                "hook_event_name": "UserPromptSubmit", "session_id": "synthetic-user",
+                "transcript_path": transcript.path, "prompt": "合成用户请求"
+            ]), provider: .codex))
+        }
+    }
+
+    func testCodexInvalidOversizedAndNonMetadataFilesAreRejected() throws {
+        let transcript = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: transcript) }
+        let payload = try jsonData([
+            "hook_event_name": "UserPromptSubmit", "session_id": "synthetic-user",
+            "transcript_path": transcript.path, "prompt": "合成请求"
+        ])
+        for data in [Data("invalid".utf8), Data(repeating: 32, count: 1024 * 1024 + 1),
+                     try jsonData(["type": "response_item", "payload": ["id": "synthetic-user", "source": "cli"]]),
+                     try jsonData(["type": "session_meta", "payload": ["id": "synthetic-user", "source": "future-source"]])] {
+            try data.write(to: transcript)
+            XCTAssertThrowsError(try makeAdapter().envelope(from: payload, provider: .codex))
+        }
+    }
+
+    private func makeCodexTranscript(
+        sessionID: String,
+        source: Any = "vscode",
+        threadSource: String = "user"
+    ) throws -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("synthetic-codex-\(UUID().uuidString).jsonl")
+        var data = try JSONSerialization.data(withJSONObject: [
+            "type": "session_meta",
+            "payload": ["id": sessionID, "source": source, "thread_source": threadSource]
+        ])
+        data.append(Data("\n{\"type\":\"response_item\",\"payload\":\"synthetic-body-must-not-be-read\"}\n".utf8))
+        try data.write(to: url)
+        return url
     }
 
     private func makeAdapter() -> AgentHookAdapter {

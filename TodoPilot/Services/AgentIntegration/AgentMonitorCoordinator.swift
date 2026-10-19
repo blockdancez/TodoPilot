@@ -49,7 +49,9 @@ final class AgentMonitorCoordinator: ObservableObject {
         }
     }
 
-    func recoverAfterUnexpectedTermination() {
+    func recoverAfterUnexpectedTermination(at date: Date = Date()) {
+        // 启动时立即收口已过期记录，避免重启后补发历史失联提醒。
+        expireLostRuns(at: date, reminderPolicy: .suppress)
         let reconciledCount = taskStore.reconcilePersistedCodeAgentTerminalRuns(runStore.runs)
         if reconciledCount > 0 {
             logger.info("agent_terminal_tasks_reconciled", metadata: [
@@ -133,8 +135,10 @@ final class AgentMonitorCoordinator: ObservableObject {
             handleTerminal(envelope, outcome: .completed)
         case .failed:
             handleTerminal(envelope, outcome: .failed)
-        case .cancelled, .sessionEnded:
+        case .cancelled:
             handleTerminal(envelope, outcome: .cancelled)
+        case .sessionEnded:
+            handleSessionEnd(envelope)
         }
         logger.info("agent_event_processed", metadata: [
             "provider": .publicText(envelope.provider.rawValue),
@@ -144,10 +148,14 @@ final class AgentMonitorCoordinator: ObservableObject {
     }
 
     func expireLostRuns(at date: Date = Date()) {
+        expireLostRuns(at: date, reminderPolicy: .enqueue)
+    }
+
+    private func expireLostRuns(at date: Date, reminderPolicy: TerminalReminderPolicy) {
         let cutoff = date.addingTimeInterval(-Self.lostInterval)
         let expired = runStore.activeRuns.filter { $0.lastEventAt <= cutoff }
         for run in expired {
-            finish(run: run, outcome: .lost, at: date)
+            finish(run: run, outcome: .lost, at: date, reminderPolicy: reminderPolicy)
         }
         if !expired.isEmpty {
             logger.info("agent_runs_expired", metadata: [
@@ -249,6 +257,18 @@ final class AgentMonitorCoordinator: ObservableObject {
             return
         }
         applyTerminal(run)
+    }
+
+    private func handleSessionEnd(_ envelope: AgentHookEnvelopeV1) {
+        // 会话结束会收口该时刻之前的全部回合，延迟事件不能取消后来启动的回合。
+        let endedRuns = runStore.activeRuns.filter {
+            $0.provider == envelope.provider
+                && $0.sessionIdentityHash == envelope.sessionHash
+                && $0.startedAt <= envelope.occurredAt
+        }
+        for run in endedRuns {
+            finish(run: run, outcome: .cancelled, at: envelope.occurredAt)
+        }
     }
 
     private func finish(

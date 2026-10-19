@@ -1,10 +1,12 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 enum AgentHookAdapterError: Error, Equatable {
     case invalidJSON
     case unsupportedEvent
     case missingSessionIdentifier
+    case unverifiedCodexSession
 }
 
 struct AgentHookAdapter {
@@ -17,6 +19,7 @@ struct AgentHookAdapter {
     }
 
     func envelope(from data: Data, provider: AgentHookProvider) throws -> AgentHookEnvelopeV1 {
+        let occurredAt = now()
         guard
             let object = try? JSONSerialization.jsonObject(with: data),
             let payload = object as? [String: Any]
@@ -34,6 +37,10 @@ struct AgentHookAdapter {
             throw AgentHookAdapterError.missingSessionIdentifier
         }
 
+        if provider == .codex, event == .started {
+            try Self.verifyCodexUserSession(payload: payload, sessionID: rawSessionID)
+        }
+
         let rawTurnID = turnIdentifier(provider: provider, payload: payload)
         let title = localTitle(provider: provider, event: event, payload: payload)
 
@@ -44,7 +51,7 @@ struct AgentHookAdapter {
             turnHash: rawTurnID.map(Self.sha256),
             title: title,
             workspaceName: workspaceName(provider: provider, payload: payload),
-            occurredAt: now(),
+            occurredAt: occurredAt,
             errorKind: event == .failed ? "providerFailure" : nil
         )
     }
@@ -71,6 +78,8 @@ struct AgentHookAdapter {
             switch hookName.lowercased() {
             case "userpromptsubmit": return .started
             case "stop": return .completed
+            case "interrupt": return .cancelled
+            case "sessionend": return .sessionEnded
             default: return nil
             }
 
@@ -171,6 +180,62 @@ struct AgentHookAdapter {
         )
     }
 
+    private static func verifyCodexUserSession(payload: [String: Any], sessionID: String) throws {
+        // 内部临时会话也会触发 UserPromptSubmit；只依据同会话的来源元数据建任务，绝不根据标题过滤。
+        guard let path = firstString(in: payload, keys: ["transcript_path"]),
+              let data = readCodexMetadataLine(path: path),
+              let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+              record["type"] as? String == "session_meta",
+              let metadata = record["payload"] as? [String: Any],
+              metadata["id"] as? String == sessionID else {
+            throw AgentHookAdapterError.unverifiedCodexSession
+        }
+        if let source = metadata["source"] as? [String: Any], source["subagent"] != nil {
+            throw AgentHookAdapterError.unsupportedEvent
+        }
+        if let threadSource = metadata["thread_source"] as? String {
+            // 用户创建的自动化和语音会话同样属于用户任务；未知来源保守拒绝自动导入。
+            guard ["user", "automation", "realtime_voice"].contains(threadSource) else {
+                throw AgentHookAdapterError.unsupportedEvent
+            }
+        } else {
+            // 兼容尚未写入 thread_source 的旧版 CLI/Desktop 元数据。
+            guard let source = metadata["source"] as? String,
+                  ["cli", "vscode", "exec"].contains(source) else {
+                throw AgentHookAdapterError.unverifiedCodexSession
+            }
+        }
+    }
+
+    private static func readCodexMetadataLine(path: String) -> Data? {
+        // 仅查看首行会话元数据，不扫描对话；非阻塞打开并检查普通文件，防止 FIFO 或设备阻塞 Hook。
+        let descriptor = path.withCString { Darwin.open($0, O_RDONLY | O_CLOEXEC | O_NONBLOCK | O_NOFOLLOW) }
+        guard descriptor >= 0 else { return nil }
+        defer { Darwin.close(descriptor) }
+        var info = stat()
+        guard fstat(descriptor, &info) == 0,
+              (info.st_mode & S_IFMT) == S_IFREG,
+              info.st_uid == getuid() else { return nil }
+        let maximumBytes = 1024 * 1024
+        var data = Data()
+        var buffer = [UInt8](repeating: 0, count: 4096)
+        while data.count < maximumBytes {
+            let capacity = min(buffer.count, maximumBytes - data.count)
+            let count = buffer.withUnsafeMutableBytes { Darwin.read(descriptor, $0.baseAddress, capacity) }
+            if count == 0 { return data.isEmpty ? nil : data }
+            if count < 0 {
+                if errno == EINTR { continue }
+                return nil
+            }
+            if let newline = buffer[..<count].firstIndex(of: 10) {
+                data.append(contentsOf: buffer[..<newline])
+                return data
+            }
+            data.append(contentsOf: buffer[..<count])
+        }
+        return nil
+    }
+
     private static func firstString(in payload: [String: Any], keys: [String]) -> String? {
         for key in keys {
             if let value = payload[key] as? String, !value.isEmpty {
@@ -249,7 +314,7 @@ struct AgentHookAdapter {
     ) -> String? {
         let lines = value.components(separatedBy: .newlines)
         guard let requestMarkerIndex = lines.firstIndex(where: { line in
-            sanitisedLine(line) == "## My request for Codex:"
+            ["## My request for Codex:", "## My request:"].contains(sanitisedLine(line))
         }) else {
             return nil
         }

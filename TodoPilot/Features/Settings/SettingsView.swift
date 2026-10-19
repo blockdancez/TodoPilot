@@ -715,8 +715,8 @@ struct SettingsView: View {
         case .waitingCodexTrust:
             return text(
                 copy,
-                en: "Codex app: open Settings > Hooks > User configuration and trust both pending items. Codex CLI: enter /hooks. Then return here.",
-                zh: "Codex 桌面版：打开“设置 → 钩子 → 用户配置”，分别信任两项待审核内容；Codex CLI 可输入 /hooks。完成后回到这里。"
+                en: "Codex app: open Settings > Hooks > User configuration and trust all pending TodoPilot items. Codex CLI: enter /hooks. Then return here.",
+                zh: "Codex 桌面版：打开“设置 → 钩子 → 用户配置”，信任全部待审核的 TodoPilot 项；Codex CLI 可输入 /hooks。完成后回到这里。"
             )
         case .readyForFirstRun:
             if provider == .codex {
@@ -747,7 +747,7 @@ struct SettingsView: View {
         case .claudeCode:
             text(copy, en: "UserPromptSubmit / Stop / StopFailure / SessionEnd", zh: "用户级 UserPromptSubmit / Stop / StopFailure / SessionEnd")
         case .codex:
-            text(copy, en: "UserPromptSubmit / Stop · requires trust in Codex", zh: "UserPromptSubmit / Stop · 需在 Codex 中信任")
+            text(copy, en: "UserPromptSubmit / Stop / Interrupt / SessionEnd · requires trust in Codex", zh: "UserPromptSubmit / Stop / Interrupt / SessionEnd · 需在 Codex 中信任")
         case .cursor:
             text(copy, en: "beforeSubmitPrompt / stop / sessionEnd", zh: "用户级 beforeSubmitPrompt / stop / sessionEnd")
         }
@@ -760,8 +760,8 @@ struct SettingsView: View {
         case "installed": text(copy, en: "Hooks installed. Monitoring is local and active.", zh: "Hook 已安装，本机监控已开启。")
         case "codex_trust_required": text(
             copy,
-            en: "Installed. In the Codex app, open Settings > Hooks > User configuration and trust both pending items. In Codex CLI, enter /hooks.",
-            zh: "已安装。Codex 桌面版请打开“设置 → 钩子 → 用户配置”，分别信任两项待审核内容；Codex CLI 可输入 /hooks。"
+            en: "Installed. In the Codex app, open Settings > Hooks > User configuration and trust all pending TodoPilot items. In Codex CLI, enter /hooks.",
+            zh: "已安装。Codex 桌面版请打开“设置 → 钩子 → 用户配置”，信任全部待审核的 TodoPilot 项；Codex CLI 可输入 /hooks。"
         )
         case "codex_trusted_waiting_event": text(copy, en: "Trust confirmation recorded. Create a new Codex task and submit one prompt to verify the real hook path.", zh: "已记录信任确认；请新建一个 Codex 任务并提交一句请求，验证真实 Hook 链路。")
         case "bridge_testing": text(copy, en: "Testing TodoPilot's local receiver…", zh: "正在测试 TodoPilot 本地接收器…")
