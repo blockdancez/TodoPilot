@@ -550,7 +550,9 @@ struct SettingsView: View {
                     Text(text(copy, en: "Uninstall all TodoPilot hooks", zh: "卸载全部 TodoPilot Hook"))
                 }
                 .buttonStyle(.borderless)
-                .disabled(environment.agentIntegrationOperation.isBusy || !environment.hasInstalledAgentProvider)
+                .disabled(environment.agentIntegrationOperation.isBusy || !AgentHookInstaller.Provider.allCases.contains {
+                    environment.agentHookInstaller.hasOwnedEntry(for: $0) == true
+                })
             }
 
             if let message = environment.agentIntegrationMessage {
@@ -595,7 +597,7 @@ struct SettingsView: View {
                 )
 
                 Toggle("", isOn: Binding(
-                    get: { agentProviderEnabled(provider) },
+                    get: { settingsStore.isAgentMonitoringEnabled(for: provider.agentProvider) },
                     set: { environment.updateAgentProviderMonitoring(provider, enabled: $0) }
                 ))
                 .labelsHidden()
@@ -647,7 +649,7 @@ struct SettingsView: View {
                     EmptyView()
                 }
 
-                if installed, health != .uninstalling {
+                if environment.agentHookInstaller.hasOwnedEntry(for: provider) == true, health != .uninstalling {
                     Button(role: .destructive) {
                         Task {
                             await environment.uninstallAgentMonitoring(providers: [provider])
@@ -664,14 +666,6 @@ struct SettingsView: View {
         .padding(18)
         .background(Color.white.opacity(0.84), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(SettingsTheme.rule, lineWidth: 1))
-    }
-
-    private func agentProviderEnabled(_ provider: AgentHookInstaller.Provider) -> Bool {
-        switch provider {
-        case .claudeCode: settingsStore.settings.claudeCodeMonitoringEnabled
-        case .codex: settingsStore.settings.codexMonitoringEnabled
-        case .cursor: settingsStore.settings.cursorMonitoringEnabled
-        }
     }
 
     private func agentHealthTitle(_ health: AgentIntegrationHealth, copy: AppCopy) -> String {
@@ -750,6 +744,8 @@ struct SettingsView: View {
             text(copy, en: "UserPromptSubmit / Stop / Interrupt / SessionEnd · requires trust in Codex", zh: "UserPromptSubmit / Stop / Interrupt / SessionEnd · 需在 Codex 中信任")
         case .cursor:
             text(copy, en: "beforeSubmitPrompt / stop / sessionEnd", zh: "用户级 beforeSubmitPrompt / stop / sessionEnd")
+        case .antigravity:
+            text(copy, en: "PreInvocation / Stop · waits for background work to finish", zh: "PreInvocation / Stop · 等待后台任务结束后提醒")
         }
     }
 
@@ -765,7 +761,7 @@ struct SettingsView: View {
         )
         case "codex_trusted_waiting_event": text(copy, en: "Trust confirmation recorded. Create a new Codex task and submit one prompt to verify the real hook path.", zh: "已记录信任确认；请新建一个 Codex 任务并提交一句请求，验证真实 Hook 链路。")
         case "bridge_testing": text(copy, en: "Testing TodoPilot's local receiver…", zh: "正在测试 TodoPilot 本地接收器…")
-        case "bridge_test_passed": text(copy, en: "TodoPilot's local receiver is available. This does not verify Codex trust; submit a new Codex turn next.", zh: "TodoPilot 本地接收器可用；这不代表 Codex 已信任，请继续提交一个新的 Codex 回合。")
+        case "bridge_test_passed": text(copy, en: "TodoPilot’s local receiver is available. Submit a new request in the Agent you enabled to verify its hook.", zh: "TodoPilot 本地接收器可用。请在已启用的 Agent 中提交新请求，验证 Hook 连接。")
         case "bridge_test_failed": text(copy, en: "Local bridge is unavailable. Enable monitoring or repair the hooks.", zh: "本地 Bridge 不可用，请启用监控或修复 Hook。")
         case "authorization_required": text(copy, en: "Install at least one provider hook before enabling monitoring.", zh: "启用监控前，请先安装至少一个 Provider Hook。")
         case "authorization_required_after_update": text(

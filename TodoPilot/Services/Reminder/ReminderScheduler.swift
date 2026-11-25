@@ -125,6 +125,7 @@ enum FlightReminderFlagTheme: Equatable, CaseIterable {
     case claudeCode
     case codex
     case cursor
+    case antigravity
     case mixedAgents
 
     static func agent(_ provider: AgentProvider) -> FlightReminderFlagTheme {
@@ -135,6 +136,8 @@ enum FlightReminderFlagTheme: Equatable, CaseIterable {
             return .codex
         case .cursor:
             return .cursor
+        case .antigravity:
+            return .antigravity
         }
     }
 
@@ -152,6 +155,8 @@ enum FlightReminderFlagTheme: Equatable, CaseIterable {
             return FlightReminderBannerPalette(red: 0.10, green: 0.11, blue: 0.13)
         case .cursor:
             return FlightReminderBannerPalette(red: 0.08, green: 0.08, blue: 0.07)
+        case .antigravity:
+            return FlightReminderBannerPalette(red: 57 / 255, green: 73 / 255, blue: 171 / 255)
         case .mixedAgents:
             return FlightReminderBannerPalette(red: 0.10, green: 0.30, blue: 0.82)
         }
@@ -163,7 +168,7 @@ enum FlightReminderFlagTheme: Equatable, CaseIterable {
             return FlightReminderBannerPalette(red: 1.00, green: 1.00, blue: 1.00)
         case .claudeCode:
             return FlightReminderBannerPalette(red: 0.14, green: 0.08, blue: 0.06)
-        case .codex, .cursor, .mixedAgents:
+        case .codex, .cursor, .antigravity, .mixedAgents:
             return FlightReminderBannerPalette(red: 0.98, green: 0.98, blue: 0.97)
         }
     }
@@ -2001,7 +2006,7 @@ private struct PixelRibbonBanner: View {
             return .black.opacity(0.18)
         case .claudeCode:
             return .white.opacity(0.20)
-        case .codex, .cursor, .mixedAgents:
+        case .codex, .cursor, .antigravity, .mixedAgents:
             return .black.opacity(0.30)
         }
     }

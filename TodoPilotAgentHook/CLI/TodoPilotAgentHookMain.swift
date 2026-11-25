@@ -8,7 +8,8 @@ enum TodoPilotAgentHookMain {
     static func main() {
         // Provider hooks must never be made unavailable by TodoPilot. Every
         // invalid-input, decode, connection, and delivery failure is fail-open.
-        guard let provider = providerArgument() else { return }
+        guard let rawProvider = argumentValue(for: "--provider"),
+              let provider = AgentHookProvider(rawValue: rawProvider) else { return }
         defer {
             if let output = provider.noOpSuccessOutput {
                 FileHandle.standardOutput.write(output)
@@ -19,7 +20,7 @@ enum TodoPilotAgentHookMain {
         let adapter = AgentHookAdapter()
         let envelope: AgentHookEnvelopeV1
         do {
-            envelope = try adapter.envelope(from: input, provider: provider)
+            envelope = try adapter.envelope(from: input, provider: provider, registeredEvent: argumentValue(for: "--event"))
         } catch AgentHookAdapterError.unverifiedCodexSession {
             // 仅输出固定诊断码，不泄露路径、标识或提示词；不影响 Codex 原任务执行。
             FileHandle.standardError.write(Data("todopilot_codex_session_unverified\n".utf8))
@@ -44,12 +45,12 @@ enum TodoPilotAgentHookMain {
         )
     }
 
-    private static func providerArgument() -> AgentHookProvider? {
+    private static func argumentValue(for flag: String) -> String? {
         let arguments = CommandLine.arguments.dropFirst()
-        guard let flagIndex = arguments.firstIndex(of: "--provider") else { return nil }
+        guard let flagIndex = arguments.firstIndex(of: flag) else { return nil }
         let valueIndex = arguments.index(after: flagIndex)
         guard valueIndex != arguments.endIndex else { return nil }
-        return AgentHookProvider(rawValue: arguments[valueIndex])
+        return arguments[valueIndex]
     }
 
     private static func readBoundedStandardInput() -> Data? {

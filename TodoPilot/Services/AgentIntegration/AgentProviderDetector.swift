@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 
 struct AgentProviderDetector {
@@ -34,7 +35,7 @@ struct AgentProviderDetector {
         }
     }
 
-    typealias ExecutableResolver = (_ provider: AgentHookInstaller.Provider) -> URL?
+    typealias ExecutableResolver = (_ provider: AgentHookInstaller.Provider) -> [URL]
     typealias VersionReader = (_ executableURL: URL) -> String?
 
     private let homeDirectory: URL
@@ -56,36 +57,39 @@ struct AgentProviderDetector {
     }
 
     func detect(_ provider: AgentHookInstaller.Provider) -> Detection {
-        let configurationURL = Self.configurationURL(for: provider, homeDirectory: homeDirectory)
+        let configurationURL = provider.configurationURL(in: homeDirectory)
         let configurationPresent = fileManager.fileExists(atPath: configurationURL.path)
-        let configurationStatus = inspectConfiguration(at: configurationURL)
-        let executableURL = executableResolver(provider)
-        let rawVersion = executableURL.flatMap(versionReader)
-        let parsedVersion = rawVersion.flatMap(Self.parseVersion)
+        let configurationStatus = inspectConfiguration(at: configurationURL, provider: provider)
 
-        let compatibility: Compatibility
-        if executableURL == nil {
-            compatibility = configurationPresent ? .unknown : .notInstalled
-        } else if let parsedVersion {
-            if parsedVersion < Self.minimumVersion(for: provider) {
-                compatibility = .needsUpgrade
+        // App、独立 IDE 与 CLI 可以同时安装，并共用一份 Hook 配置。优先选择可用的一端。
+        var selected: (url: URL, version: String?, compatibility: Compatibility)?
+        for executableURL in executableResolver(provider) {
+            let version = versionReader(executableURL)
+            let compatibility: Compatibility
+            if let parsed = version.flatMap(Self.parseVersion),
+               let minimum = Self.minimumVersion(for: provider, executableURL: executableURL) {
+                if parsed < minimum {
+                    compatibility = .needsUpgrade
+                } else {
+                    compatibility = configurationStatus == .invalid ? .unknown : .supported
+                }
             } else {
-                compatibility = configurationStatus == .invalid ? .unknown : .supported
+                compatibility = .unknown
             }
-        } else {
-            // Wrapper scripts and vendor-specific version strings are common.
-            // Do not claim compatibility when parsing is not dependable.
-            compatibility = .unknown
+            if selected == nil || selected?.compatibility == .needsUpgrade || compatibility == .supported {
+                selected = (executableURL, version, compatibility)
+            }
+            if compatibility == .supported { break }
         }
 
         return Detection(
             provider: provider,
-            executableURL: executableURL,
+            executableURL: selected?.url,
             configurationURL: configurationURL,
             configurationPresent: configurationPresent,
             configurationStatus: configurationStatus,
-            version: rawVersion,
-            compatibility: compatibility
+            version: selected?.version,
+            compatibility: selected?.compatibility ?? (configurationPresent ? .unknown : .notInstalled)
         )
     }
 
@@ -93,7 +97,10 @@ struct AgentProviderDetector {
         AgentHookInstaller.Provider.allCases.map(detect)
     }
 
-    private func inspectConfiguration(at url: URL) -> ConfigurationStatus {
+    private func inspectConfiguration(
+        at url: URL,
+        provider: AgentHookInstaller.Provider
+    ) -> ConfigurationStatus {
         guard fileManager.fileExists(atPath: url.path) else { return .missing }
         guard
             let data = try? Data(contentsOf: url),
@@ -101,7 +108,7 @@ struct AgentProviderDetector {
         else {
             return .invalid
         }
-        if let hooks = root["hooks"], !(hooks is [String: Any]) {
+        if let hooks = root[provider.hookGroupKey], !(hooks is [String: Any]) {
             return .invalid
         }
         return .valid
@@ -130,8 +137,9 @@ struct AgentProviderDetector {
     }
 
     private static func minimumVersion(
-        for provider: AgentHookInstaller.Provider
-    ) -> SemanticVersion {
+        for provider: AgentHookInstaller.Provider,
+        executableURL: URL
+    ) -> SemanticVersion? {
         switch provider {
         case .claudeCode:
             // StopFailure was introduced in Claude Code 2.1.78.
@@ -142,20 +150,16 @@ struct AgentProviderDetector {
         case .cursor:
             // The selected lifecycle hook payload shape is present in Cursor 2.3.
             return SemanticVersion(major: 2, minor: 3, patch: 0)
-        }
-    }
-
-    private static func configurationURL(
-        for provider: AgentHookInstaller.Provider,
-        homeDirectory: URL
-    ) -> URL {
-        switch provider {
-        case .claudeCode:
-            return homeDirectory.appendingPathComponent(".claude/settings.json")
-        case .codex:
-            return homeDirectory.appendingPathComponent(".codex/hooks.json")
-        case .cursor:
-            return homeDirectory.appendingPathComponent(".cursor/hooks.json")
+        case .antigravity:
+            // Google 的发行记录分别在 CLI 1.1.10、App 2.6.0 修复了 Stop 被跳过的问题。
+            if executableURL.lastPathComponent == "agy" {
+                return SemanticVersion(major: 1, minor: 1, patch: 10)
+            }
+            if applicationBundle(for: executableURL)?.bundleIdentifier == "com.google.antigravity" {
+                return SemanticVersion(major: 2, minor: 6, patch: 0)
+            }
+            // 独立 IDE 使用自己的版本线，未公布相同修复的版本，等待真实事件确认。
+            return nil
         }
     }
 
@@ -193,18 +197,43 @@ struct AgentProviderDetector {
                     URL(fileURLWithPath: "/Applications/Cursor.app/Contents/MacOS/Cursor"),
                     homeDirectory.appendingPathComponent("Applications/Cursor.app/Contents/MacOS/Cursor")
                 ]
+            case .antigravity:
+                executableNames = ["agy"]
+                // 用系统登记的 bundle 定位 App 和 IDE，也支持改名或移出 Applications 的安装。
+                let descriptor = AgentProviderIconDescriptor.descriptor(for: .antigravity)
+                absoluteCandidates = descriptor.bundleIdentifiers.compactMap { identifier in
+                    NSWorkspace.shared.urlForApplication(withBundleIdentifier: identifier)
+                        .flatMap { Bundle(url: $0)?.executableURL }
+                }
             }
 
             let pathCandidates = (environmentPaths + commonPaths).flatMap { directory in
                 executableNames.map { directory.appendingPathComponent($0, isDirectory: false) }
             }
-            return (absoluteCandidates + pathCandidates).first {
+            if provider == .antigravity {
+                let cli = pathCandidates.first { fileManager.isExecutableFile(atPath: $0.path) }
+                return absoluteCandidates + [cli].compactMap { $0 }
+            }
+            let executable = (absoluteCandidates + pathCandidates).first {
                 fileManager.isExecutableFile(atPath: $0.path)
             }
+            return [executable].compactMap { $0 }
         }
     }
 
+    private static func applicationBundle(for executableURL: URL) -> Bundle? {
+        let directory = executableURL.deletingLastPathComponent()
+        guard directory.lastPathComponent == "MacOS" else { return nil }
+        return Bundle(url: directory.deletingLastPathComponent().deletingLastPathComponent())
+    }
+
     private static func readVersion(executableURL: URL) -> String? {
+        if let bundle = applicationBundle(for: executableURL),
+           let identifier = bundle.bundleIdentifier,
+           AgentProviderIconDescriptor.descriptor(for: .antigravity).bundleIdentifiers.contains(identifier) {
+            // 避免执行 Electron 桌面程序的 --version 时意外打开窗口或改变焦点。
+            return bundle.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        }
         let process = Process()
         let output = Pipe()
         process.executableURL = executableURL

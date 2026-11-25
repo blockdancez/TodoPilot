@@ -611,7 +611,7 @@ private struct OnboardingGuideView: View {
                 case .unavailable:
                     OnboardingBulletList(items: [
                         rootText(copy, en: "No supported Code Agent was detected yet.", zh: "暂未检测到支持的 Code Agent。"),
-                        rootText(copy, en: "TodoPilot supports local Codex, Claude Code, and Cursor monitoring.", zh: "TodoPilot 支持本机 Codex、Claude Code 和 Cursor 监控。"),
+                        rootText(copy, en: "TodoPilot supports local Codex, Claude Code, Cursor, and Antigravity monitoring.", zh: "TodoPilot 支持本机 Codex、Claude Code、Cursor 和 Antigravity 监控。"),
                         rootText(copy, en: "Install or update an Agent, then enable monitoring later in Settings > Agent Monitoring.", zh: "安装或更新 Agent 后，可随时前往“设置 > Agent 监控”开启。")
                     ])
                 case .enabled:

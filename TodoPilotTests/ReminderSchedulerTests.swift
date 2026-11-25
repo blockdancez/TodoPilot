@@ -65,12 +65,8 @@ final class ReminderSchedulerTests: XCTestCase {
     }
 
     func testAgentFlagThemesUseReadableProviderSpecificPalettes() {
-        let themes: [FlightReminderFlagTheme] = [
-            .claudeCode,
-            .codex,
-            .cursor,
-            .mixedAgents
-        ]
+        let themes = FlightReminderFlagTheme.allCases.filter(\.isAgentTheme)
+        XCTAssertEqual(FlightReminderFlagTheme.agent(.antigravity), .antigravity)
 
         for theme in themes {
             let background = theme.backgroundPalette(fallback: .agentSuccess)
@@ -111,6 +107,7 @@ final class ReminderSchedulerTests: XCTestCase {
         let claude = AgentProviderIconDescriptor.descriptor(for: .claudeCode)
         let codex = AgentProviderIconDescriptor.descriptor(for: .codex)
         let cursor = AgentProviderIconDescriptor.descriptor(for: .cursor)
+        let antigravity = AgentProviderIconDescriptor.descriptor(for: .antigravity)
 
         XCTAssertEqual(claude.bundleIdentifiers.first, "com.anthropic.claudefordesktop")
         XCTAssertEqual(claude.applicationNames.first, "Claude")
@@ -121,6 +118,9 @@ final class ReminderSchedulerTests: XCTestCase {
         XCTAssertEqual(cursor.bundleIdentifiers.first, "com.todesktop.230313mzl4w4u92")
         XCTAssertEqual(cursor.applicationNames.first, "Cursor")
         XCTAssertEqual(cursor.fallbackAssetName, "AgentIconCursor")
+        XCTAssertEqual(antigravity.bundleIdentifiers, ["com.google.antigravity", "com.google.antigravity-ide"])
+        XCTAssertEqual(antigravity.applicationNames, ["Antigravity", "Antigravity IDE"])
+        XCTAssertEqual(antigravity.fallbackAssetName, "AgentIconAntigravity")
     }
 
     func testAgentProviderIconResolverPrefersInstalledApplicationThenFallsBackToAsset() throws {

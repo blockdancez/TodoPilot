@@ -170,6 +170,7 @@ extension AgentHookInstaller.Provider {
         case .claudeCode: .claudeCode
         case .codex: .codex
         case .cursor: .cursor
+        case .antigravity: .antigravity
         }
     }
 
@@ -178,6 +179,7 @@ extension AgentHookInstaller.Provider {
         case .claudeCode: "Claude Code"
         case .codex: "Codex"
         case .cursor: "Cursor"
+        case .antigravity: "Antigravity"
         }
     }
 }
@@ -188,6 +190,7 @@ extension AgentProvider {
         case .claudeCode: .claudeCode
         case .codex: .codex
         case .cursor: .cursor
+        case .antigravity: .antigravity
         }
     }
 }

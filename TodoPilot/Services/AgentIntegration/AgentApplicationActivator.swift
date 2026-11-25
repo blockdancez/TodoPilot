@@ -35,6 +35,10 @@ enum AgentApplicationActivator {
             ["com.openai.codex", "com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty"]
         case .cursor:
             ["com.todesktop.230313mzl4w4u92"]
+        case .antigravity:
+            // agy 也可以独立运行，桌面端未运行时沿用终端的回切顺序。
+            AgentProviderIconDescriptor.descriptor(for: .antigravity).bundleIdentifiers
+                + ["com.apple.Terminal", "com.googlecode.iterm2", "com.mitchellh.ghostty"]
         }
     }
 

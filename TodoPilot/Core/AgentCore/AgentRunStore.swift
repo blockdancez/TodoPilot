@@ -65,14 +65,13 @@ final class AgentRunStore: ObservableObject {
         let normalizedTurnHash = normalizedOptionalHash(turnIdentityHash)
         let existing: AgentRun?
         if normalizedTurnHash == nil {
-            // Claude Code does not currently provide a stable root turn id.
-            // Only the one active root turn in the session is idempotent; a
-            // later prompt in the same session must create a fresh run.
-            existing = runs.last {
-                $0.provider == provider
-                    && $0.sessionIdentityHash == sessionIdentityHash
-                    && $0.turnIdentityHash == nil
-                    && $0.state == .running
+            // 无稳定回合 ID 时，同会话的多次推理共用活动任务；终态后的新请求另建任务。
+            existing = runs.last { run in
+                guard run.provider == provider, run.sessionIdentityHash == sessionIdentityHash,
+                      run.turnIdentityHash == nil else { return false }
+                guard let endedAt = run.endedAt else { return run.state == .running }
+                // 终态前发出、终态后才送达的推理事件仍属于已结束的回合。
+                return run.startedAt <= startedAt && startedAt < endedAt
             }
         } else {
             existing = run(

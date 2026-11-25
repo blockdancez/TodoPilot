@@ -309,10 +309,91 @@ final class AgentHookAdapterTests: XCTestCase {
         }
     }
 
-    func testOnlyCodexEmitsNoOpJSONForSuccessfulHookCompletion() {
-        XCTAssertEqual(String(data: AgentHookProvider.codex.noOpSuccessOutput!, encoding: .utf8), "{}\n")
+    func testProvidersWithJSONResponseContractsEmitAnEmptyObject() {
+        XCTAssertEqual(AgentHookProvider.codex.noOpSuccessOutput, Data("{}\n".utf8))
+        XCTAssertEqual(AgentHookProvider.antigravity.noOpSuccessOutput, Data("{}\n".utf8))
         XCTAssertNil(AgentHookProvider.claudeCode.noOpSuccessOutput)
         XCTAssertNil(AgentHookProvider.cursor.noOpSuccessOutput)
+    }
+
+    func testAntigravityInvocationsUseOneConversationAndOnlyLocalDisplayFields() throws {
+        var payload: [String: Any] = [
+            "conversationId": "synthetic-conversation",
+            "rootConversationId": "synthetic-conversation",
+            "lastUserInput": "检查提醒\nsecond line stays local",
+            "workspacePaths": ["/private/workspace/project", "/private/workspace/other"],
+            "transcriptPath": "/private/transcript.jsonl",
+            "artifactDirectoryPath": "/private/artifacts",
+            "agentName": "named-root"
+        ]
+        for invocation in [0, 1, 7] {
+            payload["invocationNum"] = invocation
+            let envelope = try makeAdapter().envelope(
+                from: jsonData(payload), provider: .antigravity, registeredEvent: "PreInvocation"
+            )
+            XCTAssertEqual(envelope.event, .started)
+            XCTAssertEqual(envelope.sessionHash, AgentHookAdapter.sha256("synthetic-conversation"))
+            XCTAssertNil(envelope.turnHash)
+            XCTAssertEqual(envelope.title, "检查提醒")
+            XCTAssertEqual(envelope.workspaceName, "project")
+            let wire = String(decoding: try encodedEnvelope(envelope), as: UTF8.self)
+            for excluded in ["/private", "transcript", "artifacts", "second line", "synthetic-conversation"] {
+                XCTAssertFalse(wire.contains(excluded))
+            }
+        }
+    }
+
+    func testAntigravityIdleStopMapsKnownReasonsAndPreservesAnUnknownOutcome() throws {
+        let cases: [(String, AgentHookEvent)] = [
+            ("NO_TOOL_CALL", .completed), ("model_stop", .completed),
+            ("USER_CANCELED", .cancelled), ("TERMINAL_CUSTOM_HOOK", .cancelled),
+            ("ERROR", .failed), ("MAX_INVOCATIONS", .failed), ("max_steps_exceeded", .failed),
+            ("MAX_FORCED_INVOCATIONS", .failed), ("MAX_TOKEN_BUDGET_EXCEEDED", .failed),
+            ("TERMINAL_STEP_TYPE", .outcomeUnknown), ("INJECTED_RESPONSE", .outcomeUnknown),
+            ("future_reason", .outcomeUnknown)
+        ]
+        for (reason, event) in cases {
+            let data = try jsonData([
+                "conversationId": "synthetic-conversation", "hookEventName": "Stop",
+                "executionNum": 3, "terminationReason": reason, "fullyIdle": true,
+                "lastUserInput": "This prompt is only for the start event"
+            ])
+            let envelope = try makeAdapter().envelope(from: data, provider: .antigravity)
+            XCTAssertEqual(envelope.event, event, reason)
+            XCTAssertNil(envelope.title)
+            XCTAssertNil(envelope.turnHash)
+            XCTAssertEqual(envelope.errorKind, event == .failed ? "providerFailure" : nil)
+        }
+        let failure = try makeAdapter().envelope(
+            from: jsonData(["conversationId": "synthetic-conversation", "fullyIdle": true, "error": "private failure details"]),
+            provider: .antigravity, registeredEvent: "Stop"
+        )
+        XCTAssertEqual(failure.event, .failed)
+        XCTAssertFalse(String(decoding: try encodedEnvelope(failure), as: UTF8.self).contains("private failure details"))
+    }
+
+    func testAntigravityIgnoresIntermediateStopsToolCallsAndNestedConversations() throws {
+        var stop: [String: Any] = ["conversationId": "synthetic-conversation", "terminationReason": "model_stop"]
+        for invalidFlag: Any? in [nil, false, "true", 1] {
+            stop["fullyIdle"] = invalidFlag
+            XCTAssertThrowsError(try makeAdapter().envelope(from: jsonData(stop), provider: .antigravity, registeredEvent: "Stop")) {
+                XCTAssertEqual($0 as? AgentHookAdapterError, .unsupportedEvent)
+            }
+        }
+        for (event, fields): (String, [String: Any]) in [
+            ("PreToolUse", [:]),
+            ("PreInvocation", ["parentConversationId": "parent"]),
+            ("Stop", ["rootConversationId": "other", "fullyIdle": true])
+        ] {
+            var payload = fields
+            payload["conversationId"] = "synthetic-conversation"
+            XCTAssertThrowsError(try makeAdapter().envelope(from: jsonData(payload), provider: .antigravity, registeredEvent: event)) {
+                XCTAssertEqual($0 as? AgentHookAdapterError, .unsupportedEvent)
+            }
+        }
+        XCTAssertThrowsError(try makeAdapter().envelope(from: jsonData([:]), provider: .antigravity, registeredEvent: "PreInvocation")) {
+            XCTAssertEqual($0 as? AgentHookAdapterError, .missingSessionIdentifier)
+        }
     }
 
     func testTitleLimitCountsSwiftCharacters() throws {

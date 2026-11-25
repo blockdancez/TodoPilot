@@ -2049,6 +2049,7 @@ private struct AgentRunPill: View {
         case .failed: return "\(provider) · \(environment.copy.language == .chinese ? "失败" : "Failed")"
         case .cancelled: return "\(provider) · \(environment.copy.language == .chinese ? "已取消" : "Cancelled")"
         case .lost: return "\(provider) · \(environment.copy.language == .chinese ? "已失联" : "Lost")"
+        case .unknown: return "\(provider) · \(environment.copy.language == .chinese ? "结果未知" : "Unknown outcome")"
         case nil: return provider
         }
     }

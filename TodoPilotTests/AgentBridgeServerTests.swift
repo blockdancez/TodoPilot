@@ -98,11 +98,14 @@ final class AgentBridgeServerTests: XCTestCase {
     }
 
     func testServerCreatesPrivateSocketAndAcceptsCurrentUIDEnvelope() throws {
-        let server = AgentBridgeServer()
+        let directoryURL = URL(fileURLWithPath: "/tmp").appendingPathComponent(UUID().uuidString)
+        let socketURL = directoryURL.appendingPathComponent("hook.sock")
+        defer { try? FileManager.default.removeItem(at: directoryURL) }
+        let server = AgentBridgeServer(socketURL: socketURL)
         let received = expectation(description: "safe envelope received")
         let envelope = TodoPilot.AgentHookEnvelopeV1(
             schemaVersion: 1,
-            provider: .claudeCode,
+            provider: .antigravity,
             event: .started,
             sessionHash: String(repeating: "d", count: 64),
             turnHash: nil,
@@ -120,23 +123,25 @@ final class AgentBridgeServerTests: XCTestCase {
         defer { server.stop() }
 
         let directoryAttributes = try FileManager.default.attributesOfItem(
-            atPath: AgentBridgeRuntime.directoryURL().path
+            atPath: directoryURL.path
         )
         let socketAttributes = try FileManager.default.attributesOfItem(
-            atPath: AgentBridgeRuntime.socketURL().path
+            atPath: socketURL.path
         )
         XCTAssertEqual((directoryAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o700)
         XCTAssertEqual((socketAttributes[.posixPermissions] as? NSNumber)?.intValue, 0o600)
-        XCTAssertTrue(AgentBridgeRuntime.endpointHasPrivateOwnership())
-        XCTAssertTrue(AgentBridgeProbe.canConnect())
+        // 同一端点上未启动过的对象退出时，现有监听必须仍能接收事件。
+        AgentBridgeServer(socketURL: socketURL).stop()
+        XCTAssertTrue(AgentBridgeRuntime.endpointHasPrivateOwnership(socketURL: socketURL))
+        XCTAssertTrue(AgentBridgeProbe.canConnect(socketURL: socketURL))
 
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
-        try sendToBridge(encoder.encode(envelope))
+        try sendToBridge(encoder.encode(envelope), socketURL: socketURL)
         wait(for: [received], timeout: 1)
     }
 
-    private func sendToBridge(_ data: Data) throws {
+    private func sendToBridge(_ data: Data, socketURL: URL) throws {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         XCTAssertGreaterThanOrEqual(fd, 0)
         guard fd >= 0 else { return }
@@ -144,7 +149,7 @@ final class AgentBridgeServerTests: XCTestCase {
 
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
-        let bytes = Array(AgentBridgeRuntime.socketURL().path.utf8CString)
+        let bytes = Array(socketURL.path.utf8CString)
         let capacity = MemoryLayout.size(ofValue: address.sun_path)
         withUnsafeMutablePointer(to: &address.sun_path) { pointer in
             pointer.withMemoryRebound(to: CChar.self, capacity: capacity) { destination in

@@ -163,7 +163,8 @@ final class AppEnvironment: ObservableObject {
     var detectedAgentProviders: [AgentHookInstaller.Provider] {
         AgentHookInstaller.Provider.allCases.filter { provider in
             guard let detection = agentIntegrationSnapshots[provider]?.detection else { return false }
-            return detection.executableURL != nil || detection.configurationPresent
+            return detection.compatibility != .needsUpgrade
+                && (detection.executableURL != nil || detection.configurationPresent)
         }
     }
 
@@ -593,11 +594,7 @@ final class AppEnvironment: ObservableObject {
     }
 
     private func agentProviderSetting(_ provider: AgentHookInstaller.Provider) -> Bool {
-        switch provider {
-        case .claudeCode: settingsStore.settings.claudeCodeMonitoringEnabled
-        case .codex: settingsStore.settings.codexMonitoringEnabled
-        case .cursor: settingsStore.settings.cursorMonitoringEnabled
-        }
+        settingsStore.isAgentMonitoringEnabled(for: provider.agentProvider)
     }
 
     private func setAgentProviderSetting(_ provider: AgentHookInstaller.Provider, enabled: Bool) {
@@ -605,6 +602,7 @@ final class AppEnvironment: ObservableObject {
         case .claudeCode: settingsStore.updateClaudeCodeMonitoringEnabled(enabled)
         case .codex: settingsStore.updateCodexMonitoringEnabled(enabled)
         case .cursor: settingsStore.updateCursorMonitoringEnabled(enabled)
+        case .antigravity: settingsStore.updateAntigravityMonitoringEnabled(enabled)
         }
     }
 

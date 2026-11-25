@@ -26,7 +26,7 @@ The official macOS build also presents optional Pro features. A one-time purchas
 - Manage active, completed, snoozed, deleted, and restored tasks locally.
 - Import task candidates from Apple Calendar and Reminders.
 - See upcoming work in the status island and receive flight-style reminders.
-- Monitor local Codex, Claude Code, and Cursor task lifecycle events.
+- Monitor local Codex, Claude Code, Cursor, and Antigravity task lifecycle events.
 - Export local task data as Markdown or CSV.
 
 ## Privacy
@@ -81,7 +81,9 @@ OCR output is always treated as a draft. A task enters the Today List only after
 
 ## Code Agent Integration
 
-TodoPilot can install local lifecycle hooks for supported Codex, Claude Code, and Cursor versions. The hooks send minimal lifecycle metadata to TodoPilot through a local Unix domain socket. Prompt text, task bodies, project contents, and credentials are not forwarded.
+TodoPilot can install local lifecycle hooks for supported Codex, Claude Code, Cursor, and Antigravity versions. The hooks send minimal lifecycle metadata to TodoPilot through a local Unix domain socket. A task title can use up to 80 characters from the first nonempty line of the request. The title and lifecycle metadata stay on your Mac.
+
+To enable Antigravity, open **Settings → Agents → Antigravity → Authorize & Install**, then start a new request in Antigravity. TodoPilot adds a named hook group to `~/.gemini/config/hooks.json`. Multiple model calls in one active conversation share a task. A Stop event triggers a reminder once Antigravity reports that its background work has finished. See the [Antigravity hook reference](https://antigravity.google/docs/hooks).
 
 Hook installation updates only the selected provider's local configuration. Existing configuration is validated and preserved, and TodoPilot-owned entries can be removed from Settings.
 
@@ -110,4 +112,4 @@ xcodebuild test -scheme TodoPilot -destination 'platform=macOS' CODE_SIGNING_ALL
 
 ## Third-Party Marks
 
-Codex, Claude Code, and Cursor names and icons belong to their respective owners. They are used only to identify local task sources and do not imply endorsement or partnership. See [`TodoPilot/Resources/THIRD_PARTY_BRAND_ASSETS.md`](TodoPilot/Resources/THIRD_PARTY_BRAND_ASSETS.md) for attribution details.
+Codex, Claude Code, Cursor, and Antigravity names and icons belong to their respective owners. They are used only to identify local task sources and do not imply endorsement or partnership. See [`TodoPilot/Resources/THIRD_PARTY_BRAND_ASSETS.md`](TodoPilot/Resources/THIRD_PARTY_BRAND_ASSETS.md) for attribution details.

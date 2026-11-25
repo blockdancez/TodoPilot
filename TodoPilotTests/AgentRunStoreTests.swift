@@ -128,9 +128,9 @@ final class AgentRunStoreTests: XCTestCase {
         }
 
         XCTAssertEqual(Set(runs.map(\.provider)), Set(AgentProvider.allCases))
-        XCTAssertEqual(Set(runs.map(\.id)).count, 3)
-        XCTAssertEqual(Set(runs.map(\.taskID)).count, 3)
-        XCTAssertEqual(store.activeRuns.count, 3)
+        XCTAssertEqual(Set(runs.map(\.id)).count, AgentProvider.allCases.count)
+        XCTAssertEqual(Set(runs.map(\.taskID)).count, AgentProvider.allCases.count)
+        XCTAssertEqual(store.activeRuns.count, AgentProvider.allCases.count)
     }
 
     func testEveryTerminalOutcomeIsStoredWithoutChangingItsMeaning() {

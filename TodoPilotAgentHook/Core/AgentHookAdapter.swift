@@ -18,7 +18,11 @@ struct AgentHookAdapter {
         self.now = now
     }
 
-    func envelope(from data: Data, provider: AgentHookProvider) throws -> AgentHookEnvelopeV1 {
+    func envelope(
+        from data: Data,
+        provider: AgentHookProvider,
+        registeredEvent: String? = nil
+    ) throws -> AgentHookEnvelopeV1 {
         let occurredAt = now()
         guard
             let object = try? JSONSerialization.jsonObject(with: data),
@@ -27,7 +31,7 @@ struct AgentHookAdapter {
             throw AgentHookAdapterError.invalidJSON
         }
 
-        guard let event = normalizedEvent(provider: provider, payload: payload) else {
+        guard let event = normalizedEvent(provider: provider, payload: payload, registeredEvent: registeredEvent) else {
             throw AgentHookAdapterError.unsupportedEvent
         }
         guard !Self.isExplicitNestedAgent(provider: provider, payload: payload) else {
@@ -58,15 +62,14 @@ struct AgentHookAdapter {
 
     private func normalizedEvent(
         provider: AgentHookProvider,
-        payload: [String: Any]
+        payload: [String: Any],
+        registeredEvent: String?
     ) -> AgentHookEvent? {
-        guard let hookName = Self.firstString(in: payload, keys: ["hook_event_name", "event_name", "event"]) else {
-            return nil
-        }
+        let hookName = Self.firstString(in: payload, keys: ["hook_event_name", "event_name", "event"])
 
         switch provider {
         case .claudeCode:
-            switch hookName.lowercased() {
+            switch hookName?.lowercased() {
             case "userpromptsubmit": return .started
             case "stop": return .completed
             case "stopfailure": return .failed
@@ -75,7 +78,7 @@ struct AgentHookAdapter {
             }
 
         case .codex:
-            switch hookName.lowercased() {
+            switch hookName?.lowercased() {
             case "userpromptsubmit": return .started
             case "stop": return .completed
             case "interrupt": return .cancelled
@@ -84,7 +87,7 @@ struct AgentHookAdapter {
             }
 
         case .cursor:
-            switch hookName.lowercased() {
+            switch hookName?.lowercased() {
             case "beforesubmitprompt": return .started
             case "sessionend":
                 return Self.cursorTerminalEvent(
@@ -99,6 +102,29 @@ struct AgentHookAdapter {
             default:
                 return nil
             }
+
+        case .antigravity:
+            // 旧版 stdin 不带事件名，安装器在命令中传入对应的注册事件。
+            switch registeredEvent ?? payload["hookEventName"] as? String {
+            case "PreInvocation": return .started
+            case "Stop": return Self.antigravityStopEvent(payload)
+            default: return nil
+            }
+        }
+    }
+
+    private static func antigravityStopEvent(_ payload: [String: Any]) -> AgentHookEvent? {
+        // 仍有后台命令时 Stop 只是中间状态，提前结束会发出错误的完成提醒。
+        guard let idle = payload["fullyIdle"] as? NSNumber,
+              CFGetTypeID(idle) == CFBooleanGetTypeID(), idle.boolValue else { return nil }
+        let reason = (payload["terminationReason"] as? String)?.lowercased()
+        if reason == "user_canceled" || reason == "terminal_custom_hook" { return .cancelled }
+        if firstString(in: payload, keys: ["error"]) != nil { return .failed }
+        switch reason {
+        case "no_tool_call", "model_stop": return .completed
+        case "error", "max_invocations", "max_forced_invocations", "max_token_budget_exceeded", "max_steps_exceeded":
+            return .failed
+        default: return .outcomeUnknown
         }
     }
 
@@ -114,6 +140,8 @@ struct AgentHookAdapter {
             keys = ["session_id", "thread_id", "conversation_id"]
         case .cursor:
             keys = ["conversation_id", "session_id"]
+        case .antigravity:
+            keys = ["conversationId"]
         }
         return Self.firstString(in: payload, keys: keys)
     }
@@ -129,6 +157,9 @@ struct AgentHookAdapter {
             return Self.firstString(in: payload, keys: ["turn_id", "prompt_id"])
         case .cursor:
             return Self.firstString(in: payload, keys: ["generation_id", "turn_id"])
+        case .antigravity:
+            // 调用序号和执行尝试次数代表不同阶段，使用会话内唯一的活跃任务关联事件。
+            return nil
         }
     }
 
@@ -145,6 +176,8 @@ struct AgentHookAdapter {
         switch provider {
         case .claudeCode, .codex, .cursor:
             promptKeys = ["prompt", "user_prompt"]
+        case .antigravity:
+            promptKeys = ["lastUserInput"]
         }
 
         guard let prompt = Self.firstString(in: payload, keys: promptKeys) else {
@@ -167,6 +200,9 @@ struct AgentHookAdapter {
         if provider == .cursor,
            let roots = payload["workspace_roots"] as? [Any] {
             rawPath = roots.compactMap { $0 as? String }.first(where: { !$0.isEmpty })
+        } else if provider == .antigravity {
+            let paths = payload["workspacePaths"] as? [String]
+            rawPath = paths?.first(where: { !$0.isEmpty }) ?? Self.firstString(in: payload, keys: ["cwd"])
         } else {
             rawPath = Self.firstString(in: payload, keys: ["cwd", "workspace"])
         }
@@ -284,6 +320,10 @@ struct AgentHookAdapter {
                 in: payload,
                 keys: ["parent_conversation_id", "subagent_id", "subagent_type"]
             ) != nil
+        case .antigravity:
+            if firstString(in: payload, keys: ["parentConversationId"]) != nil { return true }
+            guard let rootID = firstString(in: payload, keys: ["rootConversationId"]) else { return false }
+            return rootID != payload["conversationId"] as? String
         }
     }
 

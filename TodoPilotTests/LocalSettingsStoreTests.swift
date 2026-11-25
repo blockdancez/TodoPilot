@@ -76,6 +76,7 @@ final class LocalSettingsStoreTests: XCTestCase {
         XCTAssertTrue(store.settings.claudeCodeMonitoringEnabled)
         XCTAssertTrue(store.settings.codexMonitoringEnabled)
         XCTAssertTrue(store.settings.cursorMonitoringEnabled)
+        XCTAssertFalse(store.isAgentMonitoringEnabled(for: .antigravity))
         XCTAssertFalse(store.settings.agentOnboardingSkipped)
         XCTAssertFalse(store.settings.codexHooksTrustConfirmed)
         XCTAssertFalse(store.settings.claudeCodeConnectionVerified)
@@ -84,6 +85,21 @@ final class LocalSettingsStoreTests: XCTestCase {
         XCTAssertFalse(store.isAgentConnectionVerified(.claudeCode))
         XCTAssertFalse(store.isAgentConnectionVerified(.codex))
         XCTAssertFalse(store.isAgentConnectionVerified(.cursor))
+    }
+
+    func testExistingMonitoringRequiresSeparateAntigravityAuthorization() {
+        defaults.set(true, forKey: "agentMonitoring.enabled")
+        let upgraded = LocalSettingsStore(defaults: defaults)
+        XCTAssertFalse(upgraded.isAgentMonitoringEnabled(for: .antigravity))
+        XCTAssertFalse(upgraded.isAgentConnectionVerified(.antigravity))
+
+        upgraded.updateAntigravityMonitoringEnabled(true)
+        upgraded.updateAgentConnectionVerified(.antigravity, verified: true)
+
+        let restored = LocalSettingsStore(defaults: defaults)
+        XCTAssertTrue(restored.isAgentMonitoringEnabled(for: .antigravity))
+        XCTAssertTrue(restored.isAgentConnectionVerified(.antigravity))
+        XCTAssertFalse(restored.isAgentConnectionVerified(.cursor))
     }
 
     func testAgentConnectionVerificationPersistsPerProvider() {

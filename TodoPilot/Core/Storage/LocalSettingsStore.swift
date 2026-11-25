@@ -248,11 +248,14 @@ struct AppSettings: Equatable {
     var claudeCodeMonitoringEnabled: Bool = true
     var codexMonitoringEnabled: Bool = true
     var cursorMonitoringEnabled: Bool = true
+    // 升级时只恢复用户已授权的来源，安装 Antigravity Hook 后再开启。
+    var antigravityMonitoringEnabled: Bool = false
     var agentOnboardingSkipped: Bool = false
     var codexHooksTrustConfirmed: Bool = false
     var claudeCodeConnectionVerified: Bool = false
     var codexConnectionVerified: Bool = false
     var cursorConnectionVerified: Bool = false
+    var antigravityConnectionVerified: Bool = false
 }
 
 @MainActor
@@ -284,6 +287,7 @@ final class LocalSettingsStore: ObservableObject {
             claudeCodeMonitoringEnabled: defaults.object(forKey: Keys.claudeCodeMonitoringEnabled) as? Bool ?? true,
             codexMonitoringEnabled: defaults.object(forKey: Keys.codexMonitoringEnabled) as? Bool ?? true,
             cursorMonitoringEnabled: defaults.object(forKey: Keys.cursorMonitoringEnabled) as? Bool ?? true,
+            antigravityMonitoringEnabled: defaults.bool(forKey: Keys.antigravityMonitoringEnabled),
             agentOnboardingSkipped: defaults.object(forKey: Keys.agentOnboardingSkipped) as? Bool ?? false,
             codexHooksTrustConfirmed: shouldResetLegacyAgentConnectionState
                 ? false
@@ -296,7 +300,8 @@ final class LocalSettingsStore: ObservableObject {
                 : defaults.object(forKey: Keys.codexConnectionVerified) as? Bool ?? false,
             cursorConnectionVerified: shouldResetLegacyAgentConnectionState
                 ? false
-                : defaults.object(forKey: Keys.cursorConnectionVerified) as? Bool ?? false
+                : defaults.object(forKey: Keys.cursorConnectionVerified) as? Bool ?? false,
+            antigravityConnectionVerified: defaults.bool(forKey: Keys.antigravityConnectionVerified)
         )
         if shouldResetLegacyAgentConnectionState {
             defaults.set(false, forKey: Keys.codexHooksTrustConfirmed)
@@ -436,6 +441,15 @@ final class LocalSettingsStore: ObservableObject {
         defaults.set(enabled, forKey: Keys.agentMonitoringEnabled)
     }
 
+    func isAgentMonitoringEnabled(for provider: AgentProvider) -> Bool {
+        switch provider {
+        case .claudeCode: settings.claudeCodeMonitoringEnabled
+        case .codex: settings.codexMonitoringEnabled
+        case .cursor: settings.cursorMonitoringEnabled
+        case .antigravity: settings.antigravityMonitoringEnabled
+        }
+    }
+
     func updateClaudeCodeMonitoringEnabled(_ enabled: Bool) {
         var updated = settings
         updated.claudeCodeMonitoringEnabled = enabled
@@ -455,6 +469,13 @@ final class LocalSettingsStore: ObservableObject {
         updated.cursorMonitoringEnabled = enabled
         settings = updated
         defaults.set(enabled, forKey: Keys.cursorMonitoringEnabled)
+    }
+
+    func updateAntigravityMonitoringEnabled(_ enabled: Bool) {
+        var updated = settings
+        updated.antigravityMonitoringEnabled = enabled
+        settings = updated
+        defaults.set(enabled, forKey: Keys.antigravityMonitoringEnabled)
     }
 
     func updateAgentOnboardingSkipped(_ skipped: Bool) {
@@ -479,6 +500,8 @@ final class LocalSettingsStore: ObservableObject {
             settings.codexConnectionVerified
         case .cursor:
             settings.cursorConnectionVerified
+        case .antigravity:
+            settings.antigravityConnectionVerified
         }
     }
 
@@ -495,6 +518,9 @@ final class LocalSettingsStore: ObservableObject {
         case .cursor:
             updated.cursorConnectionVerified = verified
             key = Keys.cursorConnectionVerified
+        case .antigravity:
+            updated.antigravityConnectionVerified = verified
+            key = Keys.antigravityConnectionVerified
         }
         settings = updated
         defaults.set(verified, forKey: key)
@@ -522,10 +548,12 @@ private enum Keys {
     static let claudeCodeMonitoringEnabled = "agentMonitoring.claudeCode.enabled"
     static let codexMonitoringEnabled = "agentMonitoring.codex.enabled"
     static let cursorMonitoringEnabled = "agentMonitoring.cursor.enabled"
+    static let antigravityMonitoringEnabled = "agentMonitoring.antigravity.enabled"
     static let agentOnboardingSkipped = "agentMonitoring.onboarding.skipped"
     static let agentConnectionStateSchemaVersion = "agentMonitoring.connectionState.schemaVersion"
     static let codexHooksTrustConfirmed = "agentMonitoring.codex.hooksTrustConfirmed"
     static let claudeCodeConnectionVerified = "agentMonitoring.claudeCode.connectionVerified"
     static let codexConnectionVerified = "agentMonitoring.codex.connectionVerified"
     static let cursorConnectionVerified = "agentMonitoring.cursor.connectionVerified"
+    static let antigravityConnectionVerified = "agentMonitoring.antigravity.connectionVerified"
 }

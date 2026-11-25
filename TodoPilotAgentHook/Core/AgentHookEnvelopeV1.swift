@@ -4,12 +4,14 @@ enum AgentHookProvider: String, Codable, CaseIterable {
     case claudeCode = "CLAUDE_CODE"
     case codex = "CODEX"
     case cursor = "CURSOR"
+    case antigravity = "ANTIGRAVITY"
 
-    /// Codex Stop hooks require JSON on stdout when a command exits 0. An
-    /// empty object is a no-op response and prevents Codex from reporting an
-    /// otherwise successful TodoPilot delivery as a malformed hook result.
+    /// 按来源返回空操作响应，读取或投递失败时也允许原有 Agent 正常继续。
     var noOpSuccessOutput: Data? {
-        self == .codex ? Data("{}\n".utf8) : nil
+        switch self {
+        case .codex, .antigravity: Data("{}\n".utf8)
+        case .claudeCode, .cursor: nil
+        }
     }
 }
 
@@ -17,6 +19,7 @@ enum AgentHookEvent: String, Codable, CaseIterable {
     case started
     case completed
     case failed
+    case outcomeUnknown
     case cancelled
     case sessionEnded
 }

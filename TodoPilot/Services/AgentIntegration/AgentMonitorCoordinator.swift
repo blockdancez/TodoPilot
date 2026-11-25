@@ -122,7 +122,7 @@ final class AgentMonitorCoordinator: ObservableObject {
 
     func handle(_ envelope: AgentHookEnvelopeV1) {
         guard settingsStore.settings.agentMonitoringEnabled,
-              providerIsEnabled(envelope.provider) else {
+              settingsStore.isAgentMonitoringEnabled(for: envelope.provider) else {
             return
         }
 
@@ -139,6 +139,8 @@ final class AgentMonitorCoordinator: ObservableObject {
             handleTerminal(envelope, outcome: .cancelled)
         case .sessionEnded:
             handleSessionEnd(envelope)
+        case .outcomeUnknown:
+            handleTerminal(envelope, outcome: .unknown)
         }
         logger.info("agent_event_processed", metadata: [
             "provider": .publicText(envelope.provider.rawValue),
@@ -188,7 +190,7 @@ final class AgentMonitorCoordinator: ObservableObject {
         let detail = agentTaskDetail(provider: envelope.provider, workspaceName: envelope.workspaceName)
         _ = taskStore.ensureCodeAgentTask(
             for: result.run,
-            title: envelope.title ?? fallbackTitle(for: envelope.provider),
+            title: envelope.title ?? "\(envelope.provider.installerProvider.displayName) task",
             detail: detail
         )
     }
@@ -227,6 +229,8 @@ final class AgentMonitorCoordinator: ObservableObject {
         if let turnHash = envelope.turnHash {
             resolvedTurnHash = turnHash
         } else if matchingRuns.count == 1 {
+            // 无回合 ID 时，迟到的旧 Stop 不能结束之后才开始的任务。
+            guard matchingRuns[0].startedAt <= envelope.occurredAt else { return }
             resolvedTurnHash = matchingRuns[0].turnIdentityHash
         } else if matchingRuns.count > 1 {
             lastIntegrationError = "ambiguous_root_turn"
@@ -328,32 +332,8 @@ final class AgentMonitorCoordinator: ObservableObject {
         }
     }
 
-    private func providerIsEnabled(_ provider: AgentProvider) -> Bool {
-        switch provider {
-        case .claudeCode:
-            settingsStore.settings.claudeCodeMonitoringEnabled
-        case .codex:
-            settingsStore.settings.codexMonitoringEnabled
-        case .cursor:
-            settingsStore.settings.cursorMonitoringEnabled
-        }
-    }
-
-    private func fallbackTitle(for provider: AgentProvider) -> String {
-        switch provider {
-        case .claudeCode: "Claude Code task"
-        case .codex: "Codex task"
-        case .cursor: "Cursor task"
-        }
-    }
-
     private func agentTaskDetail(provider: AgentProvider, workspaceName: String?) -> String {
-        let providerName: String
-        switch provider {
-        case .claudeCode: providerName = "Claude Code"
-        case .codex: providerName = "Codex"
-        case .cursor: providerName = "Cursor"
-        }
+        let providerName = provider.installerProvider.displayName
         guard let workspaceName, !workspaceName.isEmpty else {
             return providerName
         }

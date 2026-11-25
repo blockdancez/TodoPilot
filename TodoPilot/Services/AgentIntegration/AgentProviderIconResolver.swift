@@ -26,6 +26,13 @@ struct AgentProviderIconDescriptor: Equatable {
                 applicationNames: ["Cursor"],
                 fallbackAssetName: "AgentIconCursor"
             )
+        case .antigravity:
+            // Antigravity App 和独立 IDE 均可产生同一套本地事件。
+            return AgentProviderIconDescriptor(
+                bundleIdentifiers: ["com.google.antigravity", "com.google.antigravity-ide"],
+                applicationNames: ["Antigravity", "Antigravity IDE"],
+                fallbackAssetName: "AgentIconAntigravity"
+            )
         }
     }
 }

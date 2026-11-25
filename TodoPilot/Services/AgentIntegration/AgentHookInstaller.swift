@@ -6,6 +6,21 @@ struct AgentHookInstaller {
         case claudeCode
         case codex
         case cursor
+        case antigravity
+
+        // Antigravity 以组名区分各个集成，另外三款工具使用固定的 hooks 键。
+        var hookGroupKey: String { self == .antigravity ? "todopilot" : "hooks" }
+
+        func configurationURL(in homeDirectory: URL) -> URL {
+            let relativePath: String
+            switch self {
+            case .claudeCode: relativePath = ".claude/settings.json"
+            case .codex: relativePath = ".codex/hooks.json"
+            case .cursor: relativePath = ".cursor/hooks.json"
+            case .antigravity: relativePath = ".gemini/config/hooks.json"
+            }
+            return homeDirectory.appendingPathComponent(relativePath, isDirectory: false)
+        }
     }
 
     enum ProviderState: Equatable {
@@ -84,20 +99,7 @@ struct AgentHookInstaller {
     }
 
     func configurationURL(for provider: Provider) -> URL {
-        switch provider {
-        case .claudeCode:
-            return homeDirectory
-                .appendingPathComponent(".claude", isDirectory: true)
-                .appendingPathComponent("settings.json", isDirectory: false)
-        case .codex:
-            return homeDirectory
-                .appendingPathComponent(".codex", isDirectory: true)
-                .appendingPathComponent("hooks.json", isDirectory: false)
-        case .cursor:
-            return homeDirectory
-                .appendingPathComponent(".cursor", isDirectory: true)
-                .appendingPathComponent("hooks.json", isDirectory: false)
-        }
+        provider.configurationURL(in: homeDirectory)
     }
 
     func hasInstalledHook(for provider: Provider) -> Bool {
@@ -124,15 +126,16 @@ struct AgentHookInstaller {
         guard fileManager.fileExists(atPath: url.path),
               let data = try? Data(contentsOf: url),
               let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-              let hooks = root["hooks"] as? [String: Any] else {
+              let hooks = root[provider.hookGroupKey] as? [String: Any] else {
             return false
         }
-        let ownedEntry: [String: Any] = provider == .cursor
-            ? cursorEntry()
-            : nestedEntry(provider: provider)
+        if provider == .antigravity, let enabled = hooks["enabled"], !Self.isJSONBoolean(enabled, equalTo: true) {
+            return false
+        }
         return Self.events(for: provider).allSatisfy { event in
             guard let entries = hooks[event] as? [Any] else { return false }
-            return entries.contains { Self.jsonObjectsEqual($0, ownedEntry) }
+            let entry = ownedEntry(provider: provider, event: event)
+            return entries.contains { Self.jsonObjectsEqual($0, entry) }
         }
     }
 
@@ -193,7 +196,7 @@ struct AgentHookInstaller {
         }
         try apply(changes)
 
-        let shouldRemoveHelper = forceHelperRemoval || !Provider.allCases.contains(where: hasOwnedEntry)
+        let shouldRemoveHelper = forceHelperRemoval || !Provider.allCases.contains { hasOwnedEntry(for: $0) != false }
         if shouldRemoveHelper, fileManager.fileExists(atPath: installedHelperURL.path) {
             try fileManager.removeItem(at: installedHelperURL)
         }
@@ -227,22 +230,12 @@ struct AgentHookInstaller {
             root = [:]
         }
 
-        let replacement: [String: Any]
-        switch provider {
-        case .claudeCode, .codex:
-            replacement = try mergeNestedHooks(
-                root: root,
-                provider: provider,
-                installing: installing,
-                configurationURL: url
-            )
-        case .cursor:
-            replacement = try mergeCursorHooks(
-                root: root,
-                installing: installing,
-                configurationURL: url
-            )
-        }
+        let replacement = try mergeHooks(
+            root: root,
+            provider: provider,
+            installing: installing,
+            configurationURL: url
+        )
 
         guard !Self.jsonObjectsEqual(root, replacement) else {
             return PlannedConfigurationChange(url: url, originalData: originalData, replacementData: nil)
@@ -259,122 +252,82 @@ struct AgentHookInstaller {
         )
     }
 
-    private func mergeNestedHooks(
+    private func mergeHooks(
         root: [String: Any],
         provider: Provider,
         installing: Bool,
         configurationURL: URL
     ) throws -> [String: Any] {
         var result = root
+        let groupKey = provider.hookGroupKey
         var hooks: [String: Any]
-        if let existing = root["hooks"] {
+        if let existing = root[groupKey] {
             guard let dictionary = existing as? [String: Any] else {
-                throw InstallerError.incompatibleConfiguration(configurationURL, key: "hooks")
+                throw InstallerError.incompatibleConfiguration(configurationURL, key: groupKey)
             }
             hooks = dictionary
         } else {
             hooks = [:]
         }
 
-        for event in Self.events(for: provider) {
-            var entries: [Any]
-            if let existing = hooks[event] {
-                guard let array = existing as? [Any] else {
-                    throw InstallerError.incompatibleConfiguration(configurationURL, key: "hooks.\(event)")
+        // 暂时移出自己的处理器，避免重复安装，也保留同组中用户添加的命令。
+        let events = Self.events(for: provider)
+        var removedOwnedEntry = false
+        for event in events {
+            guard let existing = hooks[event] else { continue }
+            guard var entries = existing as? [Any] else {
+                throw InstallerError.incompatibleConfiguration(configurationURL, key: "\(groupKey).\(event)")
+            }
+            let entry = ownedEntry(provider: provider, event: event)
+            let count = entries.count
+            entries.removeAll { Self.jsonObjectsEqual($0, entry) }
+            if entries.count != count {
+                removedOwnedEntry = true
+                hooks[event] = entries.isEmpty ? nil : entries
+            }
+        }
+        if !installing, !removedOwnedEntry { return root }
+
+        if installing {
+            if provider == .antigravity, let enabled = hooks["enabled"], !Self.isJSONBoolean(enabled, equalTo: true) {
+                // 显式授权可重新启用自己的组，避免同时启用用户已停用的其他命令。
+                guard Self.isJSONBoolean(enabled, equalTo: false), hooks.count == 1 else {
+                    throw InstallerError.incompatibleConfiguration(configurationURL, key: "\(groupKey).enabled")
                 }
-                entries = array
-            } else {
-                entries = []
+                hooks["enabled"] = true
             }
-
-            let ownedEntry = nestedEntry(provider: provider)
-            entries.removeAll { Self.jsonObjectsEqual($0, ownedEntry) }
-            if installing {
-                entries.append(ownedEntry)
-            }
-
-            if entries.isEmpty {
-                hooks.removeValue(forKey: event)
-            } else {
+            for event in events {
+                var entries = hooks[event] as? [Any] ?? []
+                entries.append(ownedEntry(provider: provider, event: event))
                 hooks[event] = entries
+            }
+            if provider == .cursor, result["version"] == nil {
+                result["version"] = 1
             }
         }
 
-        if hooks.isEmpty, root["hooks"] == nil, !installing {
-            result.removeValue(forKey: "hooks")
+        if provider == .antigravity, hooks.isEmpty {
+            result.removeValue(forKey: groupKey)
         } else {
-            result["hooks"] = hooks
+            result[groupKey] = hooks
         }
         return result
     }
 
-    private func mergeCursorHooks(
-        root: [String: Any],
-        installing: Bool,
-        configurationURL: URL
-    ) throws -> [String: Any] {
-        var result = root
-        var hooks: [String: Any]
-        if let existing = root["hooks"] {
-            guard let dictionary = existing as? [String: Any] else {
-                throw InstallerError.incompatibleConfiguration(configurationURL, key: "hooks")
-            }
-            hooks = dictionary
-        } else {
-            hooks = [:]
+    private func ownedEntry(provider: Provider, event: String) -> [String: Any] {
+        let command = helperCommand(provider: provider)
+        switch provider {
+        case .claudeCode, .codex:
+            return [
+                "matcher": "",
+                "hooks": [["type": "command", "command": command, "timeout": 2]]
+            ]
+        case .cursor:
+            return ["command": command, "timeout": 2]
+        case .antigravity:
+            // 部分 Antigravity 版本的 stdin 不含事件名，每个直接处理器通过参数传入自己的事件。
+            return ["type": "command", "command": "\(command) --event \(event)", "timeout": 2]
         }
-
-        let ownedEntry = cursorEntry()
-        for event in Self.events(for: .cursor) {
-            var entries: [Any]
-            if let existing = hooks[event] {
-                guard let array = existing as? [Any] else {
-                    throw InstallerError.incompatibleConfiguration(configurationURL, key: "hooks.\(event)")
-                }
-                entries = array
-            } else {
-                entries = []
-            }
-
-            entries.removeAll { Self.jsonObjectsEqual($0, ownedEntry) }
-            if installing {
-                entries.append(ownedEntry)
-            }
-
-            if entries.isEmpty {
-                hooks.removeValue(forKey: event)
-            } else {
-                hooks[event] = entries
-            }
-        }
-
-        if installing, result["version"] == nil {
-            result["version"] = 1
-        }
-        if hooks.isEmpty, root["hooks"] == nil, !installing {
-            result.removeValue(forKey: "hooks")
-        } else {
-            result["hooks"] = hooks
-        }
-        return result
-    }
-
-    private func nestedEntry(provider: Provider) -> [String: Any] {
-        [
-            "matcher": "",
-            "hooks": [[
-                "type": "command",
-                "command": helperCommand(provider: provider),
-                "timeout": 2
-            ]]
-        ]
-    }
-
-    private func cursorEntry() -> [String: Any] {
-        [
-            "command": helperCommand(provider: .cursor),
-            "timeout": 2
-        ]
     }
 
     private func helperCommand(provider: Provider) -> String {
@@ -470,28 +423,28 @@ struct AgentHookInstaller {
             return ["UserPromptSubmit", "Stop", "Interrupt", "SessionEnd"]
         case .cursor:
             return ["beforeSubmitPrompt", "stop", "sessionEnd"]
+        case .antigravity:
+            return ["PreInvocation", "Stop"]
         }
     }
 
-    private func hasOwnedEntry(for provider: Provider) -> Bool {
+    // 无法解析时保留共享 Helper；设置页只为确实找到的条目提供卸载。
+    func hasOwnedEntry(for provider: Provider) -> Bool? {
         let url = configurationURL(for: provider)
         guard fileManager.fileExists(atPath: url.path) else { return false }
         guard
             let data = try? Data(contentsOf: url),
-            let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
-            let hooks = root["hooks"] as? [String: Any]
+            let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
         else {
-            // An unselected configuration that cannot be inspected must never
-            // cause the shared helper to be removed.
-            return true
+            return nil
         }
 
-        let ownedEntry: [String: Any] = provider == .cursor
-            ? cursorEntry()
-            : nestedEntry(provider: provider)
+        guard let group = root[provider.hookGroupKey] else { return false }
+        guard let hooks = group as? [String: Any] else { return nil }
         return Self.events(for: provider).contains { event in
             guard let entries = hooks[event] as? [Any] else { return false }
-            return entries.contains { Self.jsonObjectsEqual($0, ownedEntry) }
+            let entry = ownedEntry(provider: provider, event: event)
+            return entries.contains { Self.jsonObjectsEqual($0, entry) }
         }
     }
 
@@ -504,7 +457,13 @@ struct AgentHookInstaller {
         case .claudeCode: return "CLAUDE_CODE"
         case .codex: return "CODEX"
         case .cursor: return "CURSOR"
+        case .antigravity: return "ANTIGRAVITY"
         }
+    }
+
+    private static func isJSONBoolean(_ value: Any, equalTo expected: Bool) -> Bool {
+        // NSNumber 的相等比较会把 JSON 的 0/1 当成布尔值。
+        CFGetTypeID(value as CFTypeRef) == CFBooleanGetTypeID() && (value as? Bool) == expected
     }
 
     private static func jsonObjectsEqual(_ lhs: Any, _ rhs: Any) -> Bool {

@@ -106,6 +106,84 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertEqual(backupCount(nextTo: cursorURL), 1)
     }
 
+    func testAntigravityNamedHooksInstallRepairAndUninstallPreserveUserHandlers() throws {
+        let installer = makeInstaller()
+        let url = homeDirectory.appendingPathComponent(".gemini/config/hooks.json")
+        XCTAssertEqual(installer.configurationURL(for: .antigravity), url)
+        let userEntry = ["type": "command", "command": "user-hook"]
+        let original: [String: Any] = [
+            "user-hooks": ["Stop": [userEntry]],
+            "todopilot": ["PreInvocation": [userEntry]]
+        ]
+        try writeJSON(original, to: url)
+
+        let result = try installer.install(providers: [.antigravity])
+        XCTAssertEqual(result.providerStates, [.antigravity: .installed])
+        var installed = try readJSON(url)
+        XCTAssertNil(installed["hooks"])
+        var group = try XCTUnwrap(installed["todopilot"] as? [String: Any])
+        for event in ["PreInvocation", "Stop"] {
+            let handlers = try XCTUnwrap(group[event] as? [[String: Any]])
+            XCTAssertEqual(handlers.count, event == "PreInvocation" ? 2 : 1)
+            let command: [String: Any] = [
+                "type": "command",
+                "command": "'\(result.helperURL.path)' --provider ANTIGRAVITY --event \(event)",
+                "timeout": 2
+            ]
+            XCTAssertTrue(handlers.contains { NSDictionary(dictionary: $0).isEqual(to: command) })
+        }
+        XCTAssertTrue(installer.hasInstalledHook(for: .antigravity))
+        let firstInstall = try Data(contentsOf: url)
+        _ = try installer.install(providers: [.antigravity])
+        XCTAssertEqual(try Data(contentsOf: url), firstInstall)
+        XCTAssertEqual(backupCount(nextTo: url), 1)
+
+        group.removeValue(forKey: "Stop")
+        installed["todopilot"] = group
+        try writeJSON(installed, to: url)
+        XCTAssertFalse(installer.hasInstalledHook(for: .antigravity))
+        _ = try installer.install(providers: [.antigravity])
+        XCTAssertTrue(installer.hasInstalledHook(for: .antigravity))
+
+        try installer.uninstall(providers: [.antigravity])
+        XCTAssertTrue(NSDictionary(dictionary: try readJSON(url)).isEqual(to: original))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: result.helperURL.path))
+    }
+
+    func testDisabledAntigravityGroupRequiresExplicitAuthorizationAndPreservesOtherDisabledHandlers() throws {
+        let installer = makeInstaller()
+        let url = installer.configurationURL(for: .antigravity)
+        _ = try installer.install(providers: [.antigravity, .codex])
+        var installed = try readJSON(url)
+        var group = try XCTUnwrap(installed["todopilot"] as? [String: Any])
+        group["enabled"] = false
+        installed["todopilot"] = group
+        try writeJSON(installed, to: url)
+        let disabled = try Data(contentsOf: url)
+
+        XCTAssertFalse(installer.hasInstalledHook(for: .antigravity))
+        XCTAssertEqual(installer.hasOwnedEntry(for: .antigravity), true)
+        XCTAssertTrue(try installer.restorePreviouslyAuthorizedProviders([.antigravity]).isEmpty)
+        XCTAssertEqual(try Data(contentsOf: url), disabled)
+        try installer.uninstall(providers: [.codex])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: installer.installedHelperURL.path))
+        _ = try installer.install(providers: [.antigravity])
+        XCTAssertTrue(installer.hasInstalledHook(for: .antigravity))
+
+        group["SessionStart"] = [["command": "disabled-user-hook"]]
+        installed["todopilot"] = group
+        try writeJSON(installed, to: url)
+        let disabledWithUserHook = try Data(contentsOf: url)
+        XCTAssertThrowsError(try installer.install(providers: [.antigravity]))
+        XCTAssertEqual(try Data(contentsOf: url), disabledWithUserHook)
+
+        group["enabled"] = 1
+        installed["todopilot"] = group
+        try writeJSON(installed, to: url)
+        XCTAssertFalse(installer.hasInstalledHook(for: .antigravity))
+        XCTAssertThrowsError(try installer.install(providers: [.antigravity]))
+    }
+
     func testInstalledHookRequiresHelperToMatchBundledVersion() throws {
         let installer = makeInstaller()
         _ = try installer.install(providers: [.codex])
@@ -368,6 +446,46 @@ final class AgentHookInstallerTests: XCTestCase {
         XCTAssertEqual(detection.compatibility, .unknown)
     }
 
+    func testAntigravityDetectorReadsAppBundleAndPrefersSupportedCLIOverOldDesktop() throws {
+        let contents = temporaryRoot.appendingPathComponent("Antigravity.app/Contents", isDirectory: true)
+        let executable = contents.appendingPathComponent("MacOS/Antigravity")
+        try FileManager.default.createDirectory(at: executable.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data().write(to: executable)
+        let metadata = try PropertyListSerialization.data(fromPropertyList: [
+            "CFBundleIdentifier": "com.google.antigravity",
+            "CFBundlePackageType": "APPL",
+            "CFBundleExecutable": "Antigravity",
+            "CFBundleShortVersionString": "2.5.9"
+        ], format: .xml, options: 0)
+        try metadata.write(to: contents.appendingPathComponent("Info.plist"))
+
+        let oldApp = AgentProviderDetector(homeDirectory: homeDirectory, executableResolver: { _ in [executable] })
+            .detect(.antigravity)
+        XCTAssertEqual(oldApp.version, "2.5.9")
+        XCTAssertEqual(oldApp.compatibility, .needsUpgrade)
+        XCTAssertEqual(oldApp.configurationURL, makeInstaller().configurationURL(for: .antigravity))
+        XCTAssertEqual(makeDetector(executable: executable, version: "2.6.0").detect(.antigravity).compatibility, .supported)
+
+        let cli = temporaryRoot.appendingPathComponent("agy")
+        let mixed = AgentProviderDetector(
+            homeDirectory: homeDirectory,
+            executableResolver: { _ in [executable, cli] },
+            versionReader: { $0 == cli ? "agy 1.1.10" : "2.5.9" }
+        ).detect(.antigravity)
+        XCTAssertEqual(mixed.executableURL, cli)
+        XCTAssertEqual(mixed.compatibility, .supported)
+        XCTAssertEqual(makeDetector(executable: cli, version: "1.1.9").detect(.antigravity).compatibility, .needsUpgrade)
+    }
+
+    func testAntigravityDetectorChecksItsNamedConfigurationGroup() throws {
+        let config = makeInstaller().configurationURL(for: .antigravity)
+        let detector = makeDetector(executable: temporaryRoot.appendingPathComponent("agy"), version: "1.5.4")
+        try writeJSON(["other-integration": [:]], to: config)
+        XCTAssertEqual(detector.detect(.antigravity).configurationStatus, .valid)
+        try writeJSON(["todopilot": []], to: config)
+        XCTAssertEqual(detector.detect(.antigravity).configurationStatus, .invalid)
+    }
+
     private func makeInstaller() -> AgentHookInstaller {
         AgentHookInstaller(
             homeDirectory: homeDirectory,
@@ -381,7 +499,7 @@ final class AgentHookInstallerTests: XCTestCase {
     private func makeDetector(executable: URL, version: String) -> AgentProviderDetector {
         AgentProviderDetector(
             homeDirectory: homeDirectory,
-            executableResolver: { _ in executable },
+            executableResolver: { _ in [executable] },
             versionReader: { _ in version }
         )
     }

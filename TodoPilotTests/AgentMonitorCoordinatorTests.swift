@@ -22,6 +22,58 @@ final class AgentMonitorCoordinatorTests: XCTestCase {
         XCTAssertEqual(system.queue.items.count, 1)
     }
 
+    func testAntigravityConversationAcrossHelperBridgeTasksAndReminders() throws {
+        let system = makeSystem()
+        let base = Date(timeIntervalSince1970: 1_800_000_000)
+
+        // 使用同一会话的两轮合成 Hook 载荷，逐次经过 Helper 编码与 App 的接收校验。
+        func receive(_ eventName: String, at second: TimeInterval, fields: [String: Any]) throws {
+            var payload = fields
+            payload["conversationId"] = "synthetic-conversation"
+            payload["workspacePaths"] = ["/work/Example"]
+            let helper = AgentHookAdapter(now: { base.addingTimeInterval(second) })
+            let event = try helper.envelope(
+                from: JSONSerialization.data(withJSONObject: payload),
+                provider: .antigravity,
+                registeredEvent: eventName
+            )
+            let encoder = JSONEncoder()
+            encoder.dateEncodingStrategy = .iso8601
+            system.coordinator.handle(try AgentBridgeEnvelopeValidator.decode(encoder.encode(event)))
+        }
+
+        let start: [String: Any] = ["lastUserInput": "First request", "invocationNum": 0]
+        try receive("PreInvocation", at: 0, fields: start)
+        XCTAssertTrue(system.taskStore.tasks.isEmpty)
+        system.settings.updateAntigravityMonitoringEnabled(true)
+        try receive("PreInvocation", at: 1, fields: start)
+        try receive("PreInvocation", at: 2, fields: ["lastUserInput": "First request", "invocationNum": 1])
+        let first = try XCTUnwrap(system.taskStore.tasks.first)
+        XCTAssertEqual(system.taskStore.tasks.count, 1)
+        XCTAssertEqual(first.title, "First request")
+        XCTAssertEqual(first.source, .codeAgent)
+        XCTAssertEqual(first.status, .doing)
+        XCTAssertTrue(system.settings.isAgentConnectionVerified(.antigravity))
+
+        let stop: [String: Any] = ["fullyIdle": true, "terminationReason": "model_stop"]
+        try receive("Stop", at: 3, fields: stop)
+        try receive("Stop", at: 3, fields: stop)
+        XCTAssertEqual(system.taskStore.tasks.first?.status, .done)
+        XCTAssertEqual(system.queue.items.map(\.outcome), [.completed])
+        XCTAssertEqual(AgentReminderBatch(items: system.queue.items).flagTheme, .antigravity)
+        try receive("PreInvocation", at: 2, fields: start)
+        XCTAssertTrue(system.runStore.activeRuns.isEmpty)
+
+        try receive("PreInvocation", at: 5, fields: ["lastUserInput": "Next request", "invocationNum": 0])
+        try receive("Stop", at: 3, fields: stop)
+        XCTAssertEqual(system.taskStore.tasks.count, 2)
+        XCTAssertEqual(system.runStore.activeRuns.count, 1)
+        try receive("Stop", at: 8, fields: ["fullyIdle": true, "terminationReason": "TERMINAL_STEP_TYPE"])
+        XCTAssertTrue(system.runStore.activeRuns.isEmpty)
+        XCTAssertEqual(system.queue.items.map(\.outcome), [.completed, .unknown])
+        XCTAssertEqual(AgentReminderBatch(items: system.queue.items).warningCount, 1)
+    }
+
     func testCodexContinuationForCompletedTurnDoesNotCreateAnotherTask() throws {
         let system = makeSystem()
         let sessionHash = String(repeating: "a", count: 64)

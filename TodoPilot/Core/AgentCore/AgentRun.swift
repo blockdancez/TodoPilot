@@ -4,6 +4,7 @@ enum AgentProvider: String, CaseIterable, Codable, Hashable, Sendable {
     case claudeCode = "CLAUDE_CODE"
     case codex = "CODEX"
     case cursor = "CURSOR"
+    case antigravity = "ANTIGRAVITY"
 }
 
 enum AgentRunState: String, Codable, Equatable, Sendable {
@@ -16,6 +17,7 @@ enum AgentRunOutcome: String, CaseIterable, Codable, Hashable, Sendable {
     case failed = "FAILED"
     case cancelled = "CANCELLED"
     case lost = "LOST"
+    case unknown = "UNKNOWN"
 }
 
 enum AgentRunReminderState: String, CaseIterable, Codable, Equatable, Sendable {

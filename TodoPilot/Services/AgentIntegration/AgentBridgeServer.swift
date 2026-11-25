@@ -7,6 +7,7 @@ enum AgentHookEvent: String, Codable, CaseIterable {
     case failed
     case cancelled
     case sessionEnded
+    case outcomeUnknown
 }
 
 struct AgentHookEnvelopeV1: Codable, Equatable {
@@ -35,11 +36,11 @@ enum AgentBridgeRuntime {
         directoryURL(uid: uid).appendingPathComponent("agent-hook-v1.sock", isDirectory: false)
     }
 
-    static func endpointHasPrivateOwnership(uid: uid_t = getuid()) -> Bool {
+    static func endpointHasPrivateOwnership(socketURL: URL = socketURL(), uid: uid_t = getuid()) -> Bool {
         var directoryInfo = stat()
         var socketInfo = stat()
-        guard lstat(directoryURL(uid: uid).path, &directoryInfo) == 0,
-              lstat(socketURL(uid: uid).path, &socketInfo) == 0 else {
+        guard lstat(socketURL.deletingLastPathComponent().path, &directoryInfo) == 0,
+              lstat(socketURL.path, &socketInfo) == 0 else {
             return false
         }
         return (directoryInfo.st_mode & S_IFMT) == S_IFDIR
@@ -206,6 +207,7 @@ final class AgentBridgeServer {
     private let queue: DispatchQueue
     private let fileManager: FileManager
     private let uid: uid_t
+    private let socketURL: URL
     private var listenerFD: Int32 = -1
     private var readSource: DispatchSourceRead?
     private var handler: EnvelopeHandler?
@@ -213,10 +215,12 @@ final class AgentBridgeServer {
     init(
         fileManager: FileManager = .default,
         uid: uid_t = getuid(),
+        socketURL: URL? = nil,
         queue: DispatchQueue = DispatchQueue(label: "com.fubb.TodoPilot.agent-bridge", qos: .utility)
     ) {
         self.fileManager = fileManager
         self.uid = uid
+        self.socketURL = socketURL ?? AgentBridgeRuntime.socketURL(uid: uid)
         self.queue = queue
     }
 
@@ -230,9 +234,7 @@ final class AgentBridgeServer {
             return
         }
 
-        let directoryURL = AgentBridgeRuntime.directoryURL(uid: uid)
-        let socketURL = AgentBridgeRuntime.socketURL(uid: uid)
-        try preparePrivateDirectory(directoryURL)
+        try preparePrivateDirectory(socketURL.deletingLastPathComponent())
         if fileManager.fileExists(atPath: socketURL.path) {
             try fileManager.removeItem(at: socketURL)
         }
@@ -267,15 +269,17 @@ final class AgentBridgeServer {
     }
 
     func stop() {
+        // 未启动的接收器没有持有端点，析构时也不能移除运行中实例的 socket。
+        guard listenerFD >= 0 else { return }
         handler = nil
         if let source = readSource {
             readSource = nil
             source.cancel()
-        } else if listenerFD >= 0 {
+        } else {
             Darwin.close(listenerFD)
         }
         listenerFD = -1
-        try? fileManager.removeItem(at: AgentBridgeRuntime.socketURL(uid: uid))
+        try? fileManager.removeItem(at: socketURL)
     }
 
     private func preparePrivateDirectory(_ url: URL) throws {
